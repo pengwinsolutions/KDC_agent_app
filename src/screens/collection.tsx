@@ -96,20 +96,16 @@ export function TestDetailsScreen() {
       showToast(`Scan samples for ${total - done} more ${total - done === 1 ? 'patient' : 'patients'}`, 'caution');
       return;
     }
+    // Cash to collect: straight to Collect Cash, which has its own checklist and final confirm.
+    if (pcase === 'cash' || pcase === 'cash_due') {
+      nav.navigate('collect-payment', { params: { bookingId: booking.booking_id, mode: pcase === 'cash' ? 'booking' : 'cash_due', completeAfter: true } });
+      return;
+    }
     setConfirm(true);
   };
 
+  /** Only a prepaid booking gets here: completing it closes the booking and sends the samples to the lab. */
   const onConfirm = async () => {
-    if (pcase === 'cash') {
-      setConfirm(false);
-      nav.navigate('collect-payment', { params: { bookingId: booking.booking_id, mode: 'booking', completeAfter: true } });
-      return;
-    }
-    if (pcase === 'cash_due') {
-      setConfirm(false);
-      nav.navigate('collect-payment', { params: { bookingId: booking.booking_id, mode: 'cash_due', completeAfter: true } });
-      return;
-    }
     setCompleting(true);
     const res = await Bookings.setStatus(booking.id, 'COMPLETED');
     setCompleting(false);
@@ -123,11 +119,7 @@ export function TestDetailsScreen() {
     } else showToast(res.message || 'Couldn’t complete the booking', 'critical');
   };
 
-  const dialog = {
-    cash: { title: 'Collect payment to finish?', message: `All samples are in. Collect ${rupee(booking.amount)} in cash from ${booking.user.name} to complete this booking.`, label: 'Collect payment' },
-    cash_due: { title: 'Collect payment to finish?', message: `${rupee(booking.cash_due)} is still owed for the added patient. Collect it to complete this booking.`, label: 'Collect payment' },
-    complete: { title: 'Complete this booking?', message: 'All samples are scanned and uploaded. The booking will close and the samples go to the lab.', label: 'Complete booking' },
-  }[pcase];
+  const dialog = { title: 'Complete this booking?', message: 'All samples are scanned and uploaded. The booking will close and the samples go to the lab.', label: 'Complete booking' };
 
   return (
     <Screen padBottom={false}>
@@ -237,7 +229,6 @@ export function TestDetailsScreen() {
         message={dialog.message}
         confirmLabel={dialog.label}
         loading={completing}
-        icon={pcase === 'complete' ? undefined : <Banknote className="h-[26px] w-[26px] text-brand-600" strokeWidth={2.2} />}
         onConfirm={onConfirm}
         onCancel={() => setConfirm(false)}
       />
@@ -410,8 +401,8 @@ export function SampleScreen() {
   const [submitting, setSubmitting] = useState(false);
   const seeded = useRef(false);
 
-  const patient = booking ? patientsOf(booking).find((p) => p.key === patientKey) : undefined;
-  const slots = booking ? tubeSlots(booking) : [];
+  const patient = useMemo(() => (booking ? patientsOf(booking).find((p) => p.key === patientKey) : undefined), [booking, patientKey]);
+  const slots = useMemo(() => (booking ? tubeSlots(booking) : []), [booking]);
 
   useEffect(() => {
     if (!booking || !patient || seeded.current) return;

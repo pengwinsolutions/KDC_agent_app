@@ -21,6 +21,16 @@ export { API_CONFIG };
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 const NETWORK = 'Something went wrong. Check your connection and try again.';
+/**
+ * Live: the request never reached the server (no network, wrong address, timeout). Development
+ * builds name the address, since there the usual cause is a backend that isn't running or an
+ * Android device without the port forwarded.
+ */
+const OFFLINE = __DEV__
+  ? `Can’t reach the KDC+ server at ${API_CONFIG.baseUrl}. Start the backend (npm run start:dev in KDC_backend); on an Android device, also run npm run api:reverse.`
+  : 'Can’t reach KDC+. Check your connection and try again.';
+/** Live: the server answered but failed (5xx), so the connection is fine. */
+const SERVER_DOWN = 'KDC+ is having trouble right now. Please try again in a few minutes.';
 
 let logoutArmed = true;
 let onSessionExpired: (() => void) | null = null;
@@ -175,10 +185,10 @@ export async function liveRequest<T = any>(method: Method, path: string, body?: 
     }
     if (res.status >= 200 && res.status < 300) return { code: 0, message: res.json?.message, data: res.json?.data as T };
     const message =
-      res.status === 403 ? (res.json?.message ?? 'You can’t do this.') : res.status === 429 ? 'Too many attempts. Please wait a moment and try again.' : res.status >= 500 ? NETWORK : (firstFieldError(res.json?.errors) ?? res.json?.message ?? NETWORK);
+      res.status === 403 ? (res.json?.message ?? 'You can’t do this.') : res.status === 429 ? 'Too many attempts. Please wait a moment and try again.' : res.status >= 500 ? ((res.status === 503 && res.json?.message) || SERVER_DOWN) : (firstFieldError(res.json?.errors) ?? res.json?.message ?? SERVER_DOWN);
     return { code: 1, message, data: res.json?.data as T };
   } catch {
-    return { code: 1, message: NETWORK };
+    return { code: 1, message: OFFLINE };
   }
 }
 

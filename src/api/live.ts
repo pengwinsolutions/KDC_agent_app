@@ -14,6 +14,9 @@ import type { AgentNotification, AgentProfile, Booking, BookingStatus, Envelope,
 import { useSession } from '../store/session';
 import { adoptSession, liveRequest } from './client';
 
+// Read at build time by Metro.
+const APP_VERSION: string = require('../../package.json').version;
+
 /* ---------------------------------------------------------------- Shapes */
 
 interface ApiPerson {
@@ -159,13 +162,20 @@ export const Profile = {
       agent_code: a.code,
       city: a.city ?? '',
     })),
-  registerDevice: (token: string, appId: string) =>
+  /**
+   * This phone, with its push token (null: notifications off or no Firebase), under its install id.
+   * Also links the current sign-in to the phone: the server pushes only to phones with a live one.
+   * The server caps osVersion and appVersion at 32 characters.
+   */
+  registerDevice: (fcmToken: string | null) =>
     liveRequest('PUT', `me/devices/${useSession.getState().ensureInstallId()}`, {
       platform: Platform.OS === 'ios' ? 'ios' : 'android',
-      osVersion: String(Platform.Version).slice(0, 40),
-      appVersion: appId.slice(0, 40),
-      fcmToken: token || null,
+      osVersion: String(Platform.Version).slice(0, 32),
+      appVersion: APP_VERSION.slice(0, 32),
+      fcmToken: fcmToken || null,
     }),
+  /** Sign-out: this phone leaves the account (needs the session, so before it ends). */
+  unregisterDevice: () => liveRequest('DELETE', `me/devices/${useSession.getState().ensureInstallId()}`),
   /** Agents' accounts belong to operations: the request goes to support, who close it. */
   deleteAccount: () =>
     liveRequest('POST', 'me/support-tickets', {
@@ -283,7 +293,17 @@ export const Notifications = {
     const r = await liveRequest<{ rows: ApiNotification[]; total: number; page: number; pageSize: number }>('GET', `me/notifications?page=${n}&limit=20`);
     if (r.code === 0 && n === 1) await liveRequest('POST', 'me/notifications/read-all', {});
     return mapped(r, (p) => ({
-      data: p.rows.map((x) => ({ id: x.id, type: x.event, title: x.title, message: x.body, booking_id: x.data?.code, read_flag: x.unread ? 0 : 1, created_at: x.createdAt })),
+      data: p.rows.map((x) => ({
+        id: x.id,
+        type: x.event,
+        title: x.title,
+        message: x.body,
+        target: x.data?.type,
+        // Only a booking's code is a booking id (a support ticket's isn't).
+        booking_id: !x.data?.type || x.data.type === 'lab_booking' ? (x.data?.code ?? undefined) : undefined,
+        read_flag: x.unread ? 0 : 1,
+        created_at: x.createdAt,
+      })),
       current_page: p.page,
       last_page: Math.max(1, Math.ceil(p.total / p.pageSize)),
     }));

@@ -92,6 +92,8 @@ export interface AgentNotification {
   message: string;
   image?: string;
   booking_id?: string;
+  /** Live: what the notification is about on the server (lab_booking, support_ticket, campaign). */
+  target?: string;
   read_flag: 0 | 1;
   created_at: string;
 }

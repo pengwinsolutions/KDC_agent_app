@@ -12,7 +12,7 @@ import { CallCountdownModal, openDirections, PaymentChip, StatusPill, TubeDot, u
 import { ScannerModal } from '../components/agent/Scanner';
 import { useNav, useParams } from '../navigation/navigation';
 import { useFocusFetch } from '../hooks/useFocusFetch';
-import { Bookings } from '../api/endpoints';
+import { Bookings, LIVE } from '../api/endpoints';
 import { showToast } from '../store/toast';
 import {
   addressLine, ageFromDob, cashDuePending, formatDate, isClosed, normaliseStatus, resolveTime, rupee, tubeSlots, type TubeSlot,
@@ -47,7 +47,9 @@ export function BookingDetailsScreen() {
 
   const startCall = useCallback(async () => {
     if (!b) return;
-    setCountdown(true);
+    // Live builds hand the number to the phone's dialer, so there's nothing to count down;
+    // the countdown is only for bridged calls (demo backend), where the server rings the agent.
+    if (!LIVE) setCountdown(true);
     const ok = await call(b);
     if (!ok) setCountdown(false);
   }, [b, call]);

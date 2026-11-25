@@ -11,7 +11,7 @@ import { CollectPaymentScreen } from '../screens/payment';
 import { BookingDetailsScreen } from '../screens/details';
 import * as Account from '../screens/account';
 import { setSessionExpiredHandler } from '../api/client';
-import { flushPendingPush, registerDevice, startPush } from '../notifications/push';
+import { flushPendingPush, pausePush, startPush } from '../notifications/push';
 import { useSession } from '../store/session';
 import { showToast } from '../store/toast';
 
@@ -55,15 +55,27 @@ function useDevDeepLink() {
   }, []);
 }
 
+/**
+ * Push while signed in: after the OTP, and on launch once the session is restored. Registers this
+ * phone (with its FCM token) and links the sign-in to it. Sign-out unregisters it (account.tsx).
+ */
+function usePush() {
+  const signedIn = useSession((s) => Boolean(s.token));
+  useEffect(() => {
+    if (!signedIn) return;
+    startPush();
+    return pausePush;
+  }, [signedIn]);
+}
+
 export function RootNavigator() {
   useDevDeepLink();
+  usePush();
   useEffect(() => {
-    startPush();
     setSessionExpiredHandler(() => {
       showToast('Your session has expired. Please log in again.', 'critical');
       resetRoot('login');
     });
-    registerDevice();
   }, []);
 
   return (
@@ -74,6 +86,7 @@ export function RootNavigator() {
         if (id) navigationRef.dispatch(resetAction(id));
         flushPendingPush();
       }}
+      onStateChange={flushPendingPush}
     >
       <StatusBar barStyle="dark-content" />
       <Stack.Navigator

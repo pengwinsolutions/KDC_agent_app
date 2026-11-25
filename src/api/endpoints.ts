@@ -14,14 +14,15 @@ const demo = {
   },
   Profile: {
     get: () => api.get<AgentProfile>('secure/profile'),
-    registerDevice: (token: string, appId: string) =>
+    registerDevice: (token: string | null) =>
       api.post('secure/profile/firebase', {
-        token,
+        token: token ?? '',
         bundle_version: '1',
         os_type: Platform.OS === 'ios' ? 'IOS' : 'ANDROID',
         os_version: String(Platform.Version),
-        app_id: appId,
+        app_id: 'com.kdcplus.agent',
       }),
+    unregisterDevice: (): Promise<Envelope> => Promise.resolve({ code: 0 }),
     deleteAccount: () => api.post('secure/account/delete', {}),
   },
   Bookings: {

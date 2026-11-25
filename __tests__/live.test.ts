@@ -96,11 +96,15 @@ describe('client', () => {
     replies.push(() => ok({ hello: 1 }));
     replies.push(() => ({ status: 422, body: { code: 0, message: 'Validation failed', data: null, errors: { otp: ['Invalid booking code (3 attempts left)'] } } }));
     replies.push(() => ({ status: 500, body: { code: 0, message: 'Something went wrong. Please try again.' } }));
+    replies.push(() => ({ status: 503, body: { code: 0, message: 'KDC+ is down for maintenance until 6 AM.' } }));
     replies.push(() => new Error('offline'));
     expect(await liveRequest('GET', 'agent/me')).toEqual({ code: 0, message: 'Request completed successfully', data: { hello: 1 } });
     expect(await liveRequest('POST', 'x')).toMatchObject({ code: 1, message: 'Invalid booking code (3 attempts left)' });
-    expect(await liveRequest('GET', 'x')).toMatchObject({ code: 1, message: expect.stringContaining('connection') });
-    expect(await liveRequest('GET', 'x')).toMatchObject({ code: 1, message: expect.stringContaining('connection') });
+    // A server failure is not the agent's connection; maintenance shows the server's own words.
+    expect(await liveRequest('GET', 'x')).toMatchObject({ code: 1, message: expect.stringContaining('having trouble') });
+    expect(await liveRequest('GET', 'x')).toMatchObject({ code: 1, message: 'KDC+ is down for maintenance until 6 AM.' });
+    // Unreachable: development builds name the address they tried.
+    expect(await liveRequest('GET', 'x')).toMatchObject({ code: 1, message: expect.stringContaining('Can’t reach the KDC+ server at') });
     expect(calls[0].init.headers).toMatchObject({ Authorization: 'Bearer kdc_at_x' });
   });
 

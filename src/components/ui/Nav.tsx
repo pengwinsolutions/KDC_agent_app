@@ -1,5 +1,5 @@
-import { Btn, Div, P, Span } from '../primitives/index'
-import React, { createContext, useContext } from 'react'
+import { Btn, Div, P } from '../primitives/index'
+import React, { useContext } from 'react'
 import { ChevronLeft } from '../primitives/icons'
 import { useNav } from '../../navigation/navigation'
 import { DEVICE, DirectStickyHeader, InTabs } from './Screen'

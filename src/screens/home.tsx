@@ -16,6 +16,7 @@ import { Bookings, LIVE, Profile } from '../api/endpoints';
 import { CodeSheet } from '../components/agent/CodeSheet';
 import { badgeText, useSession } from '../store/session';
 import { showToast } from '../store/toast';
+import { useOnPush } from '../notifications/push';
 import type { Booking } from '../domain/types';
 import { normaliseStatus } from '../domain/rules';
 import { profile } from '../mock-data/seed';
@@ -25,6 +26,8 @@ export function HomeScreen() {
   const unread = useSession((s) => s.unread);
   const { data, loading, refreshing, error, reload, refresh } = useFocusFetch(() => Bookings.active());
   const bookings = data ?? [];
+  // A push (a job assigned or cancelled): the list updates without pulling to refresh.
+  useOnPush(reload);
   const { calling, call } = useCallPatient();
   const [rejecting, setRejecting] = useState<Booking | null>(null);
   const [busyReject, setBusyReject] = useState(false);

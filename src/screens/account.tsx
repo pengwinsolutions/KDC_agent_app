@@ -1,7 +1,7 @@
 /** Profile, History, Notifications, Need Help and policy pages (spec 7–10). */
 import React, { useCallback, useRef, useState } from 'react';
 import { Linking, View } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import { Btn, Div, P, Span, TextField } from '../components/primitives/index';
 import {
   Bell, CalendarDays, CircleAlert, ClipboardCheck, CreditCard, FileText, FlaskConical,
@@ -21,7 +21,7 @@ import { resetMockDb } from '../api/mockServer';
 import { endSession } from '../api/client';
 import { useSession } from '../store/session';
 import { showToast } from '../store/toast';
-import { openFromPush } from '../notifications/push';
+import { openFromPush, stopPush, useOnPush } from '../notifications/push';
 import type { AgentNotification } from '../domain/types';
 import { extractList, hasMorePages, normaliseStatus, relativeTime } from '../domain/rules';
 import { SUPPORT_PHONE } from '../mock-data/seed';
@@ -35,7 +35,8 @@ export function ProfileScreen() {
   const [busy, setBusy] = useState(false);
 
   const signOut = () => {
-    endSession();
+    // This phone leaves the account first (that needs the session), then the session ends.
+    stopPush().finally(endSession);
     nav.resetTo('login');
   };
 
@@ -198,6 +199,7 @@ function normaliseNotification(raw: any): AgentNotification {
     message: String(pick(raw, ['message', 'body', 'description', 'content']) ?? ''),
     image: pick(raw, ['image', 'image_url']),
     booking_id: raw.booking_id ?? raw.data?.booking_id,
+    target: raw.target ?? raw.data?.type,
     read_flag: read === 1 || read === true || (typeof read === 'string' && read !== '0') ? 1 : 0,
     created_at: String(pick(raw, ['created_at', 'date']) ?? ''),
   };
@@ -240,6 +242,12 @@ export function NotificationsScreen() {
       load();
     }, [load]),
   );
+
+  // A push while the inbox is open: show it (opening the inbox marks it read).
+  const focused = useIsFocused();
+  useOnPush(() => {
+    if (focused) load();
+  });
 
   const loadMore = async () => {
     if (!more || fetching.current || state !== 'ready') return;

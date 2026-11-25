@@ -11,7 +11,6 @@ import { isDevLaunch, useNav, useParams } from '../navigation/navigation';
 import { useSession } from '../store/session';
 import { Auth, LIVE } from '../api/endpoints';
 import { rearmLogout, restoreSession } from '../api/client';
-import { registerDevice, requestPermission } from '../notifications/push';
 import { showToast } from '../store/toast';
 import { AGENT_MOBILE, DEMO_OTP, WEBSITE } from '../mock-data/seed';
 
@@ -83,7 +82,8 @@ export function LoginScreen() {
     const res = await Auth.sendOtp(m);
     setSending(false);
     if (res.code === 0) nav.navigate('otp', { params: { mobile: m } });
-    else setError('Please contact admin for registration.');
+    // The server's reason: unregistered number (404), wait before resending (429), offline or server down.
+    else setError(res.message || 'Please contact admin for registration.');
   };
 
   return (
@@ -195,8 +195,6 @@ export function OtpScreen() {
     if (res.code === 0 && res.data?.token) {
       useSession.getState().setToken(res.data.token);
       rearmLogout();
-      await requestPermission();
-      registerDevice();
       setVerifying(false);
       nav.resetTo('home');
     } else {

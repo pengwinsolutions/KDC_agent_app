@@ -1,6 +1,6 @@
 import { Btn, Div, Span } from '../primitives/index'
 import React from 'react'
-import { DEVICE, footerInset } from './Screen'
+import { footerInset } from './Screen'
 import { Loader2 } from '../primitives/icons'
 
 type Variant = 'primary' | 'secondary' | 'tertiary' | 'text' | 'danger' | 'success' | 'onDark' | 'light'
@@ -90,6 +90,8 @@ export function IconButton({
     <Btn
       className={`tap flex-col shrink-0 items-center justify-center rounded-full ${tones[tone]} ${className}`}
       style={{ width: size, height: size }}
+      // Icon-only: the label is what screen readers announce.
+      accessibilityLabel={label}
       {...rest}
     >
       {children}

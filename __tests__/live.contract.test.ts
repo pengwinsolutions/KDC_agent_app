@@ -51,7 +51,7 @@ suite('the agent app on the live backend', () => {
     expect(await loadRefreshToken()).toMatch(/^kdc_rt_/);
     const me = await Profile.get();
     expect(me).toMatchObject({ code: 0, data: { mobile: agent.mobile, agent_code: agent.code, city: 'Hyderabad' } });
-    expect(await Profile.registerDevice('', 'com.kdcplus.agent')).toMatchObject({ code: 0 });
+    expect(await Profile.registerDevice(null)).toMatchObject({ code: 0 });
   });
 
   it('lists both assigned bookings in the app’s shape, without the collection code', async () => {
