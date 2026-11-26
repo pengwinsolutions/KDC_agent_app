@@ -2,7 +2,7 @@
  * Fictional demo data for the agent prototype. Dates are relative to today so
  * the active list always reads as today's work.
  */
-import type { AgentNotification, AgentProfile, Booking, LabSample, Plan } from '../domain/types';
+import type { AgentNotification, AgentProfile, Booking, Delivery, LabSample, Plan } from '../domain/types';
 
 export const AGENT_MOBILE = '9876543210';
 export const DEMO_OTP = '1234';
@@ -13,7 +13,12 @@ export const profile: AgentProfile = {
   mobile: AGENT_MOBILE,
   agent_code: 'KDC-AG-0142',
   city: 'Hyderabad',
+  // The demo agent does both, so the demo shows Collections and Deliveries.
+  services: ['sample_collection', 'medicine_delivery'],
 };
+
+/** Demo only: the code every demo patient reads out for their medicine delivery. */
+export const DEMO_DELIVERY_CODE = '2468';
 
 export const SUPPORT_PHONE = '+914071234567';
 export const WEBSITE = 'https://kdcplus.in';
@@ -228,6 +233,7 @@ export function seedNotifications(): AgentNotification[] {
     id, type, title, message, read_flag: read, created_at: stampOffset(minutesAgo), booking_id,
   });
   const list: AgentNotification[] = [
+    { ...n(1302, 'agent.delivery_assigned', 'New delivery assigned', 'KDC-PH-7K2M9Q1A · Apollo Pharmacy, Madhapur → Kondapur, today 12 PM–3 PM. Collect ₹486.', 6, 0), target: 'delivery', delivery_code: 'KDC-PH-7K2M9Q1A' },
     n(1301, 'BOOKING_ASSIGNED', 'New booking assigned', 'KDC-HC-10424 · Diabetes Care Panel at Jubilee Hills, 11:00 AM today.', 12, 0, 'KDC-HC-10424'),
     n(1300, 'BOOKING_REMINDER', 'Collection in 30 minutes', 'Aarav Sharma, Banjara Hills — KDC-HC-10421 at 9:30 AM.', 45, 0, 'KDC-HC-10421'),
     n(1299, 'ADMIN_BROADCAST', 'New tube labels from Monday', 'Use the new KDC+ barcode labels for all serum tubes from Monday. Old labels are accepted until Friday.', 180, 0),
@@ -247,6 +253,96 @@ export function seedNotifications(): AgentNotification[] {
     list.push(n(1295 - i, type, title, message, 60 * 24 * (2 + i), 1));
   }
   return list;
+}
+
+/* ------------------------------------------------------------ Deliveries */
+
+const SLOT_DAY = () => new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+const minutesAgoIso = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
+
+function delivery(over: Partial<Delivery> & Pick<Delivery, 'code' | 'drop'>): Delivery {
+  return {
+    status: 'ASSIGNED',
+    orderStatus: 'out_for_delivery',
+    canAct: true,
+    nextStep: 'pick_up',
+    pickup: {
+      pharmacyCode: 'KDC-PS-0007',
+      name: 'Apollo Pharmacy',
+      line: 'Plot 12, Hitech City Road',
+      locality: 'Madhapur',
+      city: 'Hyderabad',
+      pincode: '500081',
+      phone: '9849011001',
+      lat: null,
+      lng: null,
+      pickedUpAt: null,
+    },
+    items: { lines: 2, units: 3 },
+    payment: { method: 'cod', collect: 486, collected: null },
+    slot: `${SLOT_DAY()}, 12 PM–3 PM`,
+    startsAt: null,
+    attempts: { count: 1, max: 3, current: 1 },
+    codeLocked: false,
+    codeTriesLeft: 5,
+    dispatchedAt: minutesAgoIso(20),
+    deliveredAt: null,
+    deliveredTo: null,
+    lastFailure: null,
+    ...over,
+  };
+}
+
+/** Medicine orders given to the demo agent: two out now (one picked up, prepaid), one failed, and history. */
+export function seedDeliveries(): Delivery[] {
+  return [
+    delivery({
+      code: 'KDC-PH-7K2M9Q1A',
+      drop: { name: 'Lakshmi Reddy', label: 'Home', line: 'Flat 402, Aparna Towers', area: 'Kondapur', city: 'Hyderabad', pincode: '500084', lat: 17.4691, lng: 78.3637, phone: '9876501234' },
+    }),
+    delivery({
+      code: 'KDC-PH-3XQ8V2LD',
+      status: 'PICKED_UP',
+      nextStep: 'deliver',
+      pickup: { pharmacyCode: 'KDC-PS-0011', name: 'MedPlus', line: '8-2-293, Road No. 2', locality: 'Banjara Hills', city: 'Hyderabad', pincode: '500034', phone: '9849011002', lat: null, lng: null, pickedUpAt: minutesAgoIso(8) },
+      drop: { name: 'Arjun Mehta', label: 'Office', line: 'Level 5, Cyber Pearl', area: 'Hitech City', city: 'Hyderabad', pincode: '500081', lat: 17.4504, lng: 78.3809, phone: '9876505678' },
+      items: { lines: 1, units: 2 },
+      payment: { method: 'online', collect: 0, collected: null },
+      slot: `${SLOT_DAY()}, 9 AM–12 PM`,
+    }),
+    delivery({
+      code: 'KDC-PH-9TR4B6WN',
+      status: 'FAILED',
+      orderStatus: 'delivery_failed',
+      canAct: false,
+      nextStep: 'return_to_pharmacy',
+      drop: { name: 'Sunita Rao', label: 'Home', line: '22, Lake View Colony', area: 'Gachibowli', city: 'Hyderabad', pincode: '500032', lat: null, lng: null, phone: null },
+      items: { lines: 3, units: 5 },
+      payment: { method: 'cod', collect: 1120, collected: null },
+      slot: `${SLOT_DAY()}, 9 AM–12 PM`,
+      attempts: { count: 1, max: 3, current: null },
+      codeTriesLeft: null,
+      lastFailure: { reason: 'not_home', label: 'Patient not at home', note: 'Gate locked, no answer on call', at: minutesAgoIso(55) },
+    }),
+  ];
+}
+
+export function seedPastDeliveries(): Delivery[] {
+  return [
+    delivery({
+      code: 'KDC-PH-2HD7K5PC',
+      status: 'DELIVERED',
+      orderStatus: 'delivered',
+      canAct: false,
+      nextStep: null,
+      drop: { name: 'Farhan Ali', label: 'Home', line: '5-9-30, Basheer Bagh', area: 'Himayatnagar', city: 'Hyderabad', pincode: '500029', lat: null, lng: null, phone: null },
+      payment: { method: 'cod', collect: 0, collected: 312 },
+      attempts: { count: 1, max: 3, current: null },
+      codeTriesLeft: null,
+      deliveredAt: minutesAgoIso(60 * 26),
+      deliveredTo: 'Security, Gate 2',
+    }),
+  ];
 }
 
 /* ------------------------------------------------------------------- CMS */

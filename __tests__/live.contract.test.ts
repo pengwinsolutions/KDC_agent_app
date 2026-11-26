@@ -9,7 +9,7 @@
 import { execSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { endSession, restoreSession, setSessionExpiredHandler } from '../src/api/client';
-import { Auth, Bookings, Cms, Help, Notifications, Profile } from '../src/api/endpoints';
+import { Auth, Bookings, Cms, Deliveries, Help, Notifications, Profile } from '../src/api/endpoints';
 import { idOf } from '../src/api/live';
 import { patientsOf } from '../src/domain/rules';
 import { useSession } from '../src/store/session';
@@ -138,6 +138,23 @@ suite('the agent app on the live backend', () => {
     expect(await Help.request('Scanner not working', 'The barcode scanner does not focus on small tubes.')).toMatchObject({ code: 0 });
     expect(await Cms.page('privacy-policy')).toMatchObject({ code: 0, data: { data: { title: 'Privacy policy for field agents', sections: [{ heading: 'What we collect' }] } } });
     expect(await Cms.page('no-such-page')).toMatchObject({ code: 1 });
+  });
+
+  it('skills and medicine deliveries in the app’s shape (whatever is out with this agent now)', async () => {
+    const me = await Profile.get();
+    expect(me.data!.services.length).toBeGreaterThan(0);
+    for (const scope of ['active', 'past'] as const) {
+      const r = await Deliveries[scope]();
+      expect(r.code).toBe(0);
+      expect(Array.isArray(r.data)).toBe(true);
+      for (const d of r.data!) {
+        expect(d).toMatchObject({ code: expect.stringMatching(/^KDC-PH-/), status: expect.any(String), items: { units: expect.any(Number) }, payment: { collect: expect.any(Number) } });
+        expect(JSON.stringify(d)).not.toMatch(/otp|deliveryCode/i);
+        if (scope === 'past') expect(d.canAct).toBe(false);
+      }
+    }
+    // Someone else's (or no such) order is not found.
+    expect(await Deliveries.details('KDC-PH-NOTMINE0')).toMatchObject({ code: 1 });
   });
 
   it('refreshes an expired access token quietly; after sign-out the session is gone', async () => {

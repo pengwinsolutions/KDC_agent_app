@@ -4,19 +4,22 @@
  * API_CONFIG.useMock to false; screens and stores do not change.
  */
 import { createMMKV } from 'react-native-mmkv';
-import type { AgentNotification, Booking, Envelope } from '../domain/types';
+import type { AgentNotification, Booking, Delivery, Envelope, FailureReason } from '../domain/types';
 import { canMoveTo, cashDuePending, normaliseStatus } from '../domain/rules';
 import {
-  AGENT_MOBILE, CMS, DEMO_OTP, profile, seedBookings, seedNotifications, seedPastBookings, stampOffset,
+  AGENT_MOBILE, CMS, DEMO_DELIVERY_CODE, DEMO_OTP, profile, seedBookings, seedDeliveries, seedNotifications, seedPastBookings, seedPastDeliveries, stampOffset,
 } from '../mock-data/seed';
 
 const store = createMMKV({ id: 'kdc-agent-mockdb' });
-const DB_KEY = 'db-v2'; // v2: wallet removed
+const DB_KEY = 'db-v3'; // v2: wallet removed; v3: medicine deliveries
 
 interface Db {
   active: Booking[];
   past: Booking[];
   notifications: AgentNotification[];
+  /** Medicine deliveries, active and past; `wrongCodes` counts wrong delivery codes per order. */
+  deliveries: Delivery[];
+  wrongCodes: Record<string, number>;
   nextId: number;
   callLog: { booking_id: string; event_type: string; message?: string; timestamp: string }[];
   tickets: { subject: string; reason: string; at: string }[];
@@ -27,6 +30,8 @@ function fresh(): Db {
     active: seedBookings(),
     past: seedPastBookings(),
     notifications: seedNotifications(),
+    deliveries: [...seedDeliveries(), ...seedPastDeliveries()],
+    wrongCodes: {},
     nextId: 2000,
     callLog: [],
     tickets: [],
@@ -233,6 +238,15 @@ export async function handle(method: 'GET' | 'POST', path: string, body: any, to
     return ok(res);
   }
 
+  /* Medicine deliveries (the backend's /agent/deliveries rules, docs/delivery-fleet-api.md). */
+  if (method === 'GET' && (p === 'secure/deliveries/active' || p === 'secure/deliveries/past')) {
+    const active = p.endsWith('active');
+    return ok(db.deliveries.filter((d) => isActiveDelivery(d) === active));
+  }
+  const delMatch = /^secure\/deliveries\/([\w-]+)(?:\/([\w-]+))?$/.exec(p);
+  if (delMatch) return deliveryAction(method, delMatch[1], delMatch[2], body);
+  if (method === 'POST' && p === 'secure/files') return ok({ id: db.nextId++ }, 'File uploaded');
+
   if (p === 'secure/help/request') {
     db.tickets.unshift({ subject: String(body?.subject), reason: String(body?.reason), at: stampOffset(0) });
     save();
@@ -244,4 +258,86 @@ export async function handle(method: 'GET' | 'POST', path: string, body: any, to
   }
 
   return fail(`No mock for ${method} ${p}`);
+}
+
+/* ----------------------------------------------------------- Deliveries */
+
+const MAX_CODE_TRIES = 5;
+const FAILURE_LABEL: Record<FailureReason, string> = {
+  not_home: 'Patient not at home',
+  refused: 'Patient refused the order',
+  wrong_address: 'Wrong or incomplete address',
+  unreachable: 'Patient unreachable',
+  other: 'Other',
+};
+const isActiveDelivery = (d: Delivery) => d.canAct || d.status === 'FAILED';
+
+/** Leaves the attempt: the agent loses the drop phone and the code counter. */
+function endAttempt(d: Delivery) {
+  d.canAct = false;
+  d.drop.phone = null;
+  d.attempts.current = null;
+  d.codeTriesLeft = null;
+  d.codeLocked = false;
+}
+
+function deliveryAction(method: 'GET' | 'POST', code: string, action: string | undefined, body: any): Envelope {
+  const d = db.deliveries.find((x) => x.code === code);
+  if (!d) return fail('Delivery not found');
+  if (!action) return method === 'GET' ? ok(d) : fail('Delivery not found');
+  if (action === 'call-logs') {
+    db.callLog.unshift({ booking_id: code, event_type: String(body?.event_type), message: body?.message, timestamp: new Date().toISOString() });
+    save();
+    return ok({ logged: true });
+  }
+  if (action === 'call-patient') return d.canAct && d.drop.phone ? ok({ phone: d.drop.phone }) : fail('No contact number on this delivery.');
+  if (!d.canAct) return fail('This delivery isn’t out with you any more.', 409);
+  if (action === 'picked-up') {
+    if (d.pickup && !d.pickup.pickedUpAt) d.pickup.pickedUpAt = new Date().toISOString();
+    d.status = 'PICKED_UP';
+    d.nextStep = 'deliver';
+    save();
+    return ok(d, 'Picked up');
+  }
+  if (action === 'deliver') {
+    const wrong = db.wrongCodes[code] ?? 0;
+    if (wrong >= MAX_CODE_TRIES) return fail('Too many wrong codes. Ask KDC+ to reset the delivery code.', 409);
+    if (!/^\d{4}$/.test(String(body?.otp ?? ''))) return fail('otp must be 4 digits');
+    if (String(body.otp) !== DEMO_DELIVERY_CODE) {
+      db.wrongCodes[code] = wrong + 1;
+      const left = MAX_CODE_TRIES - wrong - 1;
+      d.codeTriesLeft = left;
+      d.codeLocked = left <= 0;
+      save();
+      return left <= 0 ? fail('Too many wrong codes. Ask KDC+ to reset the delivery code.', 409) : fail(`Wrong delivery code. ${left} ${left === 1 ? 'try' : 'tries'} left.`);
+    }
+    const handedTo = String(body?.deliveredTo ?? '').trim();
+    if (handedTo && (handedTo.length < 2 || handedTo.length > 80)) return fail('deliveredTo must be 2–80 characters');
+    d.status = 'DELIVERED';
+    d.orderStatus = 'delivered';
+    d.nextStep = null;
+    d.deliveredAt = new Date().toISOString();
+    d.deliveredTo = handedTo || null;
+    if (d.payment.method === 'cod' && d.payment.collect > 0) {
+      d.payment.collected = d.payment.collect;
+      d.payment.collect = 0;
+    }
+    endAttempt(d);
+    save();
+    return ok(d, 'Delivered');
+  }
+  if (action === 'delivery-failed') {
+    const reason = String(body?.reason ?? '') as FailureReason;
+    if (!(reason in FAILURE_LABEL)) return fail('Choose why the delivery failed.');
+    const note = String(body?.note ?? '').trim();
+    if ((reason === 'other' || note) && (note.length < 3 || note.length > 255)) return fail('Add a note of 3–255 characters.');
+    d.status = 'FAILED';
+    d.orderStatus = 'delivery_failed';
+    d.nextStep = 'return_to_pharmacy';
+    d.lastFailure = { reason, label: FAILURE_LABEL[reason], note: note || null, at: new Date().toISOString() };
+    endAttempt(d);
+    save();
+    return ok(d, 'Failed delivery recorded');
+  }
+  return fail(`No mock for ${method} ${action}`);
 }

@@ -92,7 +92,9 @@ export interface AgentNotification {
   message: string;
   image?: string;
   booking_id?: string;
-  /** Live: what the notification is about on the server (lab_booking, support_ticket, campaign). */
+  /** A medicine delivery's order code (target `delivery`). */
+  delivery_code?: string;
+  /** What the notification is about (lab_booking, delivery, support_ticket, campaign); demo lab rows have none. */
   target?: string;
   read_flag: 0 | 1;
   created_at: string;
@@ -104,6 +106,68 @@ export interface AgentProfile {
   mobile: string;
   agent_code: string;
   city: string;
+  /** The agent's skills; operations set them (Admin → Field agents). */
+  services: AgentService[];
+}
+
+export type AgentService = 'sample_collection' | 'medicine_delivery';
+
+/* ------------------------------------------------------------ Deliveries */
+
+/** A medicine delivery as the agent sees it (docs/delivery-fleet-api.md, "Delivery view"). */
+export type DeliveryStatus = 'ASSIGNED' | 'PICKED_UP' | 'FAILED' | 'DELIVERED' | 'RETURNED' | 'CANCELLED' | 'REASSIGNED';
+export type FailureReason = 'not_home' | 'refused' | 'wrong_address' | 'unreachable' | 'other';
+
+export interface Delivery {
+  /** The order code, e.g. KDC-PH-…. */
+  code: string;
+  status: DeliveryStatus;
+  /** The order's own status on the server (out_for_delivery, delivered, …). */
+  orderStatus: string;
+  /** Yours and out for delivery: you may pick up, deliver, record a failure, call. */
+  canAct: boolean;
+  nextStep: 'pick_up' | 'deliver' | 'return_to_pharmacy' | null;
+  pickup: {
+    pharmacyCode: string;
+    name: string;
+    line: string;
+    locality: string;
+    city: string;
+    pincode: string;
+    phone: string | null;
+    lat: number | null;
+    lng: number | null;
+    pickedUpAt: string | null;
+  } | null;
+  drop: {
+    name: string;
+    label: string;
+    line: string;
+    area: string;
+    city: string;
+    pincode: string;
+    lat: number | null;
+    lng: number | null;
+    /** Only while the delivery is yours and out. */
+    phone: string | null;
+  };
+  items: { lines: number; units: number };
+  payment: {
+    method: 'cod' | 'online';
+    /** Cash to collect at the door, rupees; 0 when prepaid or already paid. */
+    collect: number;
+    /** Cash you collected on this order, rupees (null: none). */
+    collected: number | null;
+  };
+  slot: string;
+  startsAt: string | null;
+  attempts: { count: number; max: number; current: number | null };
+  codeLocked: boolean;
+  codeTriesLeft: number | null;
+  dispatchedAt: string | null;
+  deliveredAt: string | null;
+  deliveredTo: string | null;
+  lastFailure: { reason: FailureReason | null; label: string | null; note: string | null; at: string | null } | null;
 }
 
 /** The backend's response envelope. code 0 = success. */

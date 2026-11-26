@@ -11,11 +11,11 @@ const FORMATS = ['code-128', 'code-39', 'code-93', 'codabar', 'ean-13', 'ean-8',
 
 type Perm = 'checking' | 'granted' | 'denied';
 
-async function askCamera(): Promise<boolean> {
+export async function askCamera(message = 'KDC+ Agent uses the camera to scan the barcode on each sample tube.'): Promise<boolean> {
   if (Platform.OS !== 'android') return true; // iOS prompts on first camera use (NSCameraUsageDescription)
   const r = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.CAMERA, {
     title: 'Camera access',
-    message: 'KDC+ Agent uses the camera to scan the barcode on each sample tube.',
+    message,
     buttonPositive: 'Allow',
   });
   return r === PermissionsAndroid.RESULTS.GRANTED;

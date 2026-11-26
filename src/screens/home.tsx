@@ -1,18 +1,22 @@
-/** Home — active bookings (spec 4.4). */
+/** Home — active bookings (spec 4.4) and, for delivery agents, active medicine deliveries. */
 import React, { useCallback, useState } from 'react';
 import { View } from 'react-native';
 import { Btn, Div, P, Span } from '../components/primitives/index';
-import { Bell, ClipboardCheck, Inbox, User, X } from '../components/primitives/icons';
+import { Bell, ClipboardCheck, Inbox, Package, User, X } from '../components/primitives/icons';
 import { Screen, DEVICE } from '../components/ui/Screen';
 import { Skeleton, StateBlock } from '../components/ui/Feedback';
 import { Logo } from '../components/ui/Logo';
 import { Button } from '../components/ui/Button';
+import { Segmented } from '../components/ui/Display';
 import { BookingCard } from '../components/agent/BookingCard';
-import { ConfirmDialog, Grid, useCallPatient } from '../components/agent';
+import { DeliveryCard } from '../components/agent/DeliveryCard';
+import { ConfirmDialog, Grid, useCallDelivery, useCallPatient } from '../components/agent';
 import { AgentMark } from './auth';
-import { useNav } from '../navigation/navigation';
+import { useNav, useParams } from '../navigation/navigation';
+import type { WorkTab } from '../navigation/routes';
 import { useFocusFetch } from '../hooks/useFocusFetch';
-import { Bookings, LIVE, Profile } from '../api/endpoints';
+import { useWorkTab } from '../hooks/useWorkTab';
+import { Bookings, Deliveries, LIVE, Profile } from '../api/endpoints';
 import { CodeSheet } from '../components/agent/CodeSheet';
 import { badgeText, useSession } from '../store/session';
 import { showToast } from '../store/toast';
@@ -34,6 +38,13 @@ export function HomeScreen() {
   const [coding, setCoding] = useState<Booking | null>(null);
   const { data: me } = useFocusFetch(() => Profile.get());
   const firstName = (LIVE ? (me?.name ?? '') : profile.name).split(' ')[0];
+  const { tab, setTab, both } = useWorkTab(me, useParams<'home'>()?.tab);
+  const deliveriesQ = useFocusFetch(() => Deliveries.active());
+  const deliveries = deliveriesQ.data ?? [];
+  const reloadDeliveries = deliveriesQ.reload;
+  // A delivery assigned or taken away (agent.delivery_assigned / _unassigned): the list updates too.
+  useOnPush(reloadDeliveries);
+  const delivering = useCallDelivery();
 
   const startCollection = async (code: string) => {
     if (!coding) return null;
@@ -86,11 +97,19 @@ export function HomeScreen() {
     } else showToast(res.message || 'Couldn’t reject the booking', 'critical');
   };
 
+  const deliveryCounts = {
+    ASSIGNED: deliveries.filter((d) => d.status === 'ASSIGNED').length,
+    PICKED_UP: deliveries.filter((d) => d.status === 'PICKED_UP').length,
+    FAILED: deliveries.filter((d) => d.status === 'FAILED').length,
+  };
+  const onDeliveries = tab === 'deliveries';
+  const pull = () => (onDeliveries ? deliveriesQ.refresh() : refresh());
+
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
 
   return (
-    <Screen background="bg-canvas" onRefresh={refresh} refreshing={refreshing} padTop={false} topScrim>
+    <Screen background="bg-canvas" onRefresh={pull} refreshing={onDeliveries ? deliveriesQ.refreshing : refreshing} padTop={false} topScrim>
       {/* Header */}
       <Div className="bg-white px-5 pb-4" style={{ paddingTop: DEVICE.safeTop + 10 }}>
         <Div className="flex-row items-center justify-between">
@@ -121,16 +140,78 @@ export function HomeScreen() {
           </Div>
         </Div>
         <P className="mt-5 text-body text-ink-500">{greeting}{firstName ? `, ${firstName}` : ''}</P>
-        <P className="mt-0.5 font-display text-[26px] font-extrabold tracking-[-0.5px] text-ink-900">Today’s collections</P>
-        <Div className="mt-4 flex-row gap-2.5">
-          <Stat label="Accepted" value={counts.ACCEPTED} dot="#EA580C" />
-          <Stat label="On the way" value={counts.ONMYWAY} dot="#0068C8" />
-          <Stat label="In progress" value={counts.ONGOING} dot="#7C3AED" />
-        </Div>
+        <P className="mt-0.5 font-display text-[26px] font-extrabold tracking-[-0.5px] text-ink-900">{onDeliveries ? 'Today’s deliveries' : 'Today’s collections'}</P>
+        {both ? (
+          <Segmented
+            className="mt-4"
+            value={tab}
+            onChange={(id) => setTab(id as WorkTab)}
+            options={[
+              { id: 'collections', label: 'Collections', count: bookings.length },
+              { id: 'deliveries', label: 'Deliveries', count: deliveries.length },
+            ]}
+          />
+        ) : null}
+        {onDeliveries ? (
+          <Div className="mt-4 flex-row gap-2.5">
+            <Stat label="To pick up" value={deliveryCounts.ASSIGNED} dot="#EA580C" />
+            <Stat label="Picked up" value={deliveryCounts.PICKED_UP} dot="#0068C8" />
+            <Stat label="Bring back" value={deliveryCounts.FAILED} dot="#DC2626" />
+          </Div>
+        ) : (
+          <Div className="mt-4 flex-row gap-2.5">
+            <Stat label="Accepted" value={counts.ACCEPTED} dot="#EA580C" />
+            <Stat label="On the way" value={counts.ONMYWAY} dot="#0068C8" />
+            <Stat label="In progress" value={counts.ONGOING} dot="#7C3AED" />
+          </Div>
+        )}
       </Div>
 
       <Div className="px-4 pb-8 pt-4">
-        {loading ? (
+        {onDeliveries ? (
+          deliveriesQ.loading ? (
+            <Div className="gap-3">
+              {[0, 1].map((i) => (
+                <Skeleton key={i} className="h-[260px] w-full" rounded={18} />
+              ))}
+            </Div>
+          ) : deliveriesQ.error && !deliveries.length ? (
+            <StateBlock
+              icon={<X className="h-[26px] w-[26px]" strokeWidth={2.2} />}
+              tone="critical"
+              title="Couldn’t load deliveries"
+              body={deliveriesQ.error}
+              primary={<Button size="md" onClick={() => reloadDeliveries('initial')}>Try again</Button>}
+            />
+          ) : deliveries.length === 0 ? (
+            <Div className="mt-10">
+              <StateBlock
+                icon={<Package className="h-[26px] w-[26px]" strokeWidth={2} />}
+                tone="brand"
+                title="No deliveries right now"
+                body="Medicine orders KDC+ gives you appear here."
+                secondary={
+                  <Button variant="tertiary" size="md" icon={<ClipboardCheck className="h-[16px] w-[16px] text-ink-800" strokeWidth={2.2} />} onClick={() => nav.navigate('history', { params: { tab: 'deliveries' } })}>
+                    View history
+                  </Button>
+                }
+              />
+            </Div>
+          ) : (
+            <Grid
+              items={deliveries}
+              keyOf={(d) => d.code}
+              render={(d) => (
+                <DeliveryCard
+                  delivery={d}
+                  calling={delivering.calling === d.code}
+                  onCall={() => delivering.call(d)}
+                  onOpen={() => nav.navigate('delivery-details', { params: { code: d.code } })}
+                />
+              )}
+            />
+          )
+        ) : loading ? (
           <Div className="gap-3">
             {[0, 1].map((i) => (
               <Skeleton key={i} className="h-[300px] w-full" rounded={18} />

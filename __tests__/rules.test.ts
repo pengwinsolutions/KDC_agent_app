@@ -1,8 +1,9 @@
 import {
   ageFromDob, buildUpiIntent, canMoveTo, cashDuePending, dobFromAge, extractList, hasMorePages, normaliseQr, normaliseStatus,
   patientCount, proceedCase, relativeTime, resolveTime, rupee, tubeColour, tubeSlots,
+  attemptText, codDue, deliveryMeta, dropLine, failureProblem, itemsText,
 } from '../src/domain/rules';
-import { seedBookings } from '../src/mock-data/seed';
+import { seedBookings, seedDeliveries } from '../src/mock-data/seed';
 
 describe('status', () => {
   it('normalises spaces, hyphens and case', () => {
@@ -110,5 +111,33 @@ describe('lists and money', () => {
     expect(rupee(214380)).toBe('₹2,14,380');
     expect(rupee(649)).toBe('₹649');
     expect(rupee(-1299)).toBe('−₹1,299');
+  });
+});
+
+describe('deliveries', () => {
+  const [cod, prepaid] = seedDeliveries();
+
+  it('labels every status, unknown ones neutrally', () => {
+    expect(deliveryMeta('ASSIGNED')).toEqual({ label: 'Out for delivery', tone: 'caution' });
+    expect(deliveryMeta('FAILED').tone).toBe('critical');
+    expect(deliveryMeta('SOMETHING')).toEqual({ label: 'SOMETHING', tone: 'neutral' });
+  });
+  it('cash to collect only for unpaid cash on delivery', () => {
+    expect(codDue(cod)).toBe(486);
+    expect(codDue(prepaid)).toBeNull();
+    expect(codDue({ payment: { method: 'cod', collect: 0, collected: 486 } })).toBeNull();
+  });
+  it('a failure needs a reason, and a 3–255 character note for “other”', () => {
+    expect(failureProblem(null, '')).toContain('Choose');
+    expect(failureProblem('other', ' ')).toContain('note');
+    expect(failureProblem('other', 'ok')).toContain('3–255');
+    expect(failureProblem('other', 'Dog at the gate')).toBeNull();
+    expect(failureProblem('not_home', '')).toBeNull();
+  });
+  it('texts for cards', () => {
+    expect(itemsText(cod)).toBe('3 items');
+    expect(itemsText({ items: { lines: 1, units: 1 } })).toBe('1 item');
+    expect(attemptText(cod)).toBe('Attempt 1 of 3');
+    expect(dropLine(cod)).toBe('Flat 402, Aparna Towers, Kondapur, Hyderabad, 500084');
   });
 });

@@ -1,6 +1,6 @@
 import { Btn, Div, P, Span } from '../primitives/index'
-import React from 'react'
-import { KeyboardAvoidingView, Modal as RNModal } from 'react-native'
+import React, { useEffect, useRef, useState } from 'react'
+import { Dimensions, Keyboard, Modal as RNModal, Platform, View } from 'react-native'
 import { FrameBox } from './DeviceFrame'
 import { Check, X, Info, AlertTriangle, Loader2 } from '../primitives/icons'
 import { DEVICE } from './Screen'
@@ -153,6 +153,37 @@ export function Toast({
 
 /* ------------------------------------------------------------- Bottom sheet */
 
+/**
+ * How much of the bottom of a full-window view the keyboard covers (0 when it's closed).
+ * KeyboardAvoidingView misjudges this inside a Modal on Android (edge-to-edge: the keyboard's
+ * reported height leaves out the navigation bar, and its screenY is in the app window's
+ * coordinates), which hid the code boxes and the button. So: the keyboard's height, plus the
+ * navigation bar on Android; and nothing when the window itself shrank for the keyboard.
+ */
+export function useKeyboardInset() {
+  const [keyboard, setKeyboard] = useState(0)
+  const [height, setHeight] = useState(0)
+  const fullHeight = useRef(0)
+  useEffect(() => {
+    const ios = Platform.OS === 'ios'
+    const show = Keyboard.addListener(ios ? 'keyboardWillShow' : 'keyboardDidShow', (e) => setKeyboard(e.endCoordinates?.height ?? 0))
+    const hide = Keyboard.addListener(ios ? 'keyboardWillHide' : 'keyboardDidHide', () => setKeyboard(0))
+    return () => {
+      show.remove()
+      hide.remove()
+    }
+  }, [])
+  const onLayout = (e: { nativeEvent: { layout: { height: number } } }) => {
+    const h = e.nativeEvent.layout.height
+    if (!keyboard || h > fullHeight.current) fullHeight.current = h
+    setHeight(h)
+  }
+  if (!keyboard) return { inset: 0, onLayout }
+  // The window was resized for the keyboard (adjustResize): the view already ends above it.
+  const resized = fullHeight.current > 0 && fullHeight.current - height > keyboard * 0.5
+  return { inset: resized ? 0 : keyboard + (Platform.OS === 'android' ? DEVICE.safeBottom : 0), onLayout }
+}
+
 export function BottomSheet({
   title,
   subtitle,
@@ -168,23 +199,23 @@ export function BottomSheet({
   footer?: React.ReactNode
   scrim?: boolean
 }) {
+  const { inset, onLayout } = useKeyboardInset()
+  // With the keyboard open the sheet sits on top of it, and its body scrolls within what's left.
+  const room = Dimensions.get('window').height - inset - DEVICE.safeTop - (title ? 96 : 40) - (footer ? 80 : 0)
   return (
-    <KeyboardAvoidingView
-      behavior="padding"
-      style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, zIndex: 50 }}
-    >
+    <View onLayout={onLayout} style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, zIndex: 50 }}>
     <Div className="flex-1 flex-col justify-end">
       {scrim && <Btn onPress={onClose} className="absolute inset-0 bg-ink-900/40 " />}
       <Div
         className="relative animate-sheetUp rounded-t-[26px] bg-white shadow-sheet"
-        style={{ paddingBottom: DEVICE.safeBottom }}
+        style={{ paddingBottom: inset ? inset + 8 : DEVICE.safeBottom }}
       >
         <Div className="flex-row justify-center pb-1 pt-2.5">
           <Span className="h-[5px] w-[38px] rounded-full bg-ink-200" />
         </Div>
         {title && (
           <Div className="flex-row items-start justify-between gap-4 px-5 pb-1 pt-2">
-            <Div>
+            <Div className="min-w-0 flex-1">
               <P className="text-title-md text-ink-900">{title}</P>
               {subtitle && <P className="mt-1 text-body-sm text-ink-500">{subtitle}</P>}
             </Div>
@@ -198,11 +229,11 @@ export function BottomSheet({
             )}
           </Div>
         )}
-        <Div className="max-h-[520px] overflow-y-auto  px-5 pb-2 pt-3">{children}</Div>
+        <Div className="max-h-[520px] overflow-y-auto  px-5 pb-2 pt-3" style={inset ? { maxHeight: Math.max(160, Math.min(520, room)) } : undefined}>{children}</Div>
         {footer && <Div className="border-t border-ink-100 px-5 pb-1 pt-3.5">{footer}</Div>}
       </Div>
     </Div>
-    </KeyboardAvoidingView>
+    </View>
   )
 }
 

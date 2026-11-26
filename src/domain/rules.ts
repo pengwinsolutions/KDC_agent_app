@@ -1,5 +1,5 @@
 /** Business rules from the agent flow spec, kept free of UI so they can be tested. */
-import type { Booking, BookingStatus, LabSample, OtherPatient } from './types';
+import type { Booking, BookingStatus, Delivery, DeliveryStatus, FailureReason, LabSample, OtherPatient } from './types';
 
 /* ------------------------------------------------------------- Status */
 
@@ -318,3 +318,42 @@ export function hasMorePages(data: any, received: number, pageSize: number): boo
 /** Address on one line. */
 export const addressLine = (b: Pick<Booking, 'dno' | 'street' | 'city' | 'pincode'>) =>
   [b.dno, b.street, b.city, b.pincode].filter(Boolean).join(', ');
+
+/* ---------------------------------------------------------- Deliveries */
+
+export const DELIVERY_META: Record<DeliveryStatus, { label: string; tone: StatusTone }> = {
+  ASSIGNED: { label: 'Out for delivery', tone: 'caution' },
+  PICKED_UP: { label: 'Picked up', tone: 'brand' },
+  FAILED: { label: 'Failed', tone: 'critical' },
+  DELIVERED: { label: 'Delivered', tone: 'success' },
+  RETURNED: { label: 'Returned', tone: 'neutral' },
+  CANCELLED: { label: 'Cancelled', tone: 'neutral' },
+  REASSIGNED: { label: 'Reassigned', tone: 'neutral' },
+};
+export const deliveryMeta = (s: string) => DELIVERY_META[s as DeliveryStatus] ?? { label: String(s || 'Unknown'), tone: 'neutral' as StatusTone };
+
+/** Why a delivery failed, in the order the agent sees them (the server's reasons). */
+export const FAILURE_REASONS: { id: FailureReason; label: string }[] = [
+  { id: 'not_home', label: 'Patient not at home' },
+  { id: 'refused', label: 'Patient refused the order' },
+  { id: 'wrong_address', label: 'Wrong or incomplete address' },
+  { id: 'unreachable', label: 'Patient unreachable' },
+  { id: 'other', label: 'Other' },
+];
+
+/** A failure needs a note of 3–255 characters for "Other" (and whenever one is given). Null: fine. */
+export function failureProblem(reason: FailureReason | null, note: string): string | null {
+  if (!reason) return 'Choose why you couldn’t deliver.';
+  const n = note.trim();
+  if (reason === 'other' && !n) return 'Add a short note for “Other”.';
+  if (n && (n.length < 3 || n.length > 255)) return 'The note needs 3–255 characters.';
+  return null;
+}
+
+export const pickupLine = (d: Pick<Delivery, 'pickup'>) => (d.pickup ? [d.pickup.line, d.pickup.locality, d.pickup.city, d.pickup.pincode].filter(Boolean).join(', ') : '');
+export const dropLine = (d: Pick<Delivery, 'drop'>) => [d.drop.line, d.drop.area, d.drop.city, d.drop.pincode].filter(Boolean).join(', ');
+export const itemsText = (d: Pick<Delivery, 'items'>) => `${d.items.units} ${d.items.units === 1 ? 'item' : 'items'}`;
+/** Cash to collect at the door, or null for a prepaid (or already paid) order. */
+export const codDue = (d: Pick<Delivery, 'payment'>) => (d.payment.method === 'cod' && d.payment.collect > 0 ? d.payment.collect : null);
+/** "Attempt 1 of 3". */
+export const attemptText = (d: Pick<Delivery, 'attempts'>) => `Attempt ${d.attempts.current ?? d.attempts.count} of ${d.attempts.max}`;

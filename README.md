@@ -4,6 +4,8 @@ The field-agent (phlebotomist) app for KDC+ home sample collection. It is a bare
 
 It follows the agent flow spec: assignment, trip, collection, barcode scanning of each tube, payment and completion. The wallet from the spec has been removed at the client’s request.
 
+Agents with the `medicine_delivery` skill also deliver medicine orders for KDC+ pharmacies (backend contract: `../docs/delivery-fleet-api.md`). Their Home and History get a **Collections | Deliveries** switch; agents with one skill see only theirs.
+
 It runs on the KDC+ backend (`../kdc-backend`). A demo build can instead use the in-app mock server, which implements every endpoint in the spec with fictional bookings.
 
 ## Run
@@ -23,20 +25,21 @@ npm run android                # or: npm run ios  (run `cd ios && pod install` f
 
 ## Screens
 
-These are 13 routes from spec section 4 (the spec’s Wallet screen is removed), in one native stack. Back-swipe is off.
+These are 13 routes from spec section 4 (the spec’s Wallet screen is removed) plus delivery details, in one native stack. Back-swipe is off.
 
 | Route | Screen |
 | --- | --- |
 | `splash` | Splash and session check |
 | `login` | Agent Login (mobile number) |
 | `otp` | OTP, 4 digits, with a working Resend and a 30 s timer |
-| `home` | Active bookings: status badges, tube and payment chips, directions, call, slide-to-confirm, reject |
+| `home` | Active bookings: status badges, tube and payment chips, directions, call, slide-to-confirm, reject. Delivery agents: a Collections / Deliveries switch; delivery cards show pharmacy → drop area, window, items, “Collect ₹…” or Prepaid, attempt n/3 |
 | `test-details` | Patients with Pending/Done and progress, Add Patient, cash-due banner, Proceed decision table |
 | `sample` | Tube slots (with Urine when needed), camera barcode scan with an editable confirm, upload |
 | `collect-payment` | Cash or UPI QR, booking and cash-due modes, the confirm sequence, success |
-| `profile` | Menu: history, help, call us, policies, delete account, logout |
-| `history` | Past bookings with totals |
+| `profile` | The agent’s skills; menu: history, help, call us, policies, delete account, logout |
+| `history` | Past bookings with totals; past deliveries for delivery agents |
 | `booking-details` | Tubes (scan and submit), plan, customer (call countdown, directions), other patients, tests |
+| `delivery-details` | Pick-up card (pharmacy, directions, call, *Picked up*), drop card (patient, directions, call), items, cash, attempts; *Deliver* (the patient’s 4-digit code, tries left / locked, optional “handed to” and proof photo, cash confirmation) and *Couldn’t deliver* (reason + note) |
 | `notifications` | Inbox with infinite scroll, unread highlighting, relative time, tap routing |
 | `help` | Support request with subject chips and a 10–500 character description |
 | `policy` | Policy pages, rendered natively |
@@ -69,6 +72,7 @@ How the live app differs from the spec's backend, by design:
   - The refresh token lives in the Keychain / Keystore, readable only after the device's first unlock and never backed up. The access token is never written to disk.
   - Launching the app restores the session; *Logout* ends it on the server.
   - When the backend can't be reached, the agent stays signed in.
+- **Delivery code:** as with the collection code, the agent never receives it; the patient reads it out. Five wrong codes lock the delivery until KDC+ resets it. The proof photo uses the scanner's camera (`react-native-camera-kit` capture) and goes up as `POST /files` with `purpose: delivery_proof`.
 - **Delete Account** files a request with support, who handle it: agents' accounts belong to operations.
 - **Hidden in live builds:** the demo login hint and *Reset demo data*.
 

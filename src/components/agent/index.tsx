@@ -11,9 +11,9 @@ import { Button } from '../ui/Button';
 import { FrameBox } from '../ui/DeviceFrame';
 import { DEVICE } from '../ui/Screen';
 import { showToast } from '../../store/toast';
-import { Bookings, LIVE } from '../../api/endpoints';
-import type { Booking } from '../../domain/types';
-import { addressLine, rupee, statusMeta, tubeColour, type StatusTone } from '../../domain/rules';
+import { Bookings, Deliveries, LIVE } from '../../api/endpoints';
+import type { Booking, Delivery } from '../../domain/types';
+import { addressLine, deliveryMeta, dropLine, pickupLine, rupee, statusMeta, tubeColour, type StatusTone } from '../../domain/rules';
 import { openFromPush, useHeadsUp } from '../../notifications/push';
 
 /* ------------------------------------------------------------ Status */
@@ -30,13 +30,21 @@ const PILL: Record<StatusTone, { bg: string; text: string; dot: string }> = {
 
 /** Booking status badge (spec 3.1 colours). */
 export function StatusPill({ status }: { status: string }) {
-  const m = statusMeta(status);
-  const c = PILL[m.tone];
+  return <Pill {...statusMeta(status)} />;
+}
+
+/** A delivery's status badge, in the same colours. */
+export function DeliveryPill({ status }: { status: string }) {
+  return <Pill {...deliveryMeta(status)} />;
+}
+
+export function Pill({ label, tone }: { label: string; tone: StatusTone }) {
+  const c = PILL[tone];
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: c.bg, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3, alignSelf: 'flex-start' }}>
       <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: c.dot }} />
       <P className="text-micro font-semibold uppercase tracking-[.04em]" style={{ color: c.text }}>
-        {m.label}
+        {label}
       </P>
     </View>
   );
@@ -99,10 +107,17 @@ export function PaymentChip({ booking, past = false }: { booking: Booking; past?
 /* ------------------------------------------------------- Directions */
 
 /** Google Maps directions to the pin, else a search on the address (spec 4.4). */
-export async function openDirections(b: Booking) {
-  const lat = b.latitude ?? b.user?.latitude;
-  const lng = b.longitude ?? b.user?.longitude;
-  const addr = addressLine(b);
+export function openDirections(b: Booking) {
+  return openMaps({ lat: b.latitude ?? b.user?.latitude, lng: b.longitude ?? b.user?.longitude, address: addressLine(b) });
+}
+
+/** Directions for a delivery: to the pharmacy until it's picked up, then to the patient. */
+export function openDeliveryDirections(d: Delivery, to: 'pickup' | 'drop' = d.nextStep === 'pick_up' || d.nextStep === 'return_to_pharmacy' ? 'pickup' : 'drop') {
+  if (to === 'pickup') return openMaps({ lat: d.pickup?.lat, lng: d.pickup?.lng, address: d.pickup ? `${d.pickup.name}, ${pickupLine(d)}` : '' });
+  return openMaps({ lat: d.drop.lat, lng: d.drop.lng, address: dropLine(d) });
+}
+
+async function openMaps({ lat, lng, address: addr }: { lat?: string | number | null; lng?: string | number | null; address: string }) {
   let url: string | null = null;
   if (lat && lng) url = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
   else if (addr) url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addr)}`;
@@ -157,6 +172,38 @@ export function useCallPatient() {
     }
   };
   return { calling, call };
+}
+
+/**
+ * Call the patient of a delivery (or its pharmacy), logged like booking calls. The patient's
+ * number comes from the server, which shares it only while the delivery is yours and out.
+ */
+export function useCallDelivery() {
+  const [calling, setCalling] = useState<string | null>(null);
+  const dial = (phone: string) => Linking.openURL(`tel:${phone}`).then(() => true, () => false);
+  const call = async (d: Delivery) => {
+    if (callInFlight) return false;
+    callInFlight = true;
+    setCalling(d.code);
+    Deliveries.callLog(d.code, 'INITIATED').catch(() => undefined);
+    try {
+      const res = await Deliveries.callPatient(d.code);
+      const phone = res.code === 0 ? res.data?.phone : undefined;
+      const opened = phone ? await dial(phone) : false;
+      Deliveries.callLog(d.code, opened ? 'SUCCESS' : 'FAILED', opened ? undefined : (res.message ?? 'Couldn’t open the dialer')).catch(() => undefined);
+      if (!opened) showToast(res.code === 0 ? 'Couldn’t open the dialer' : res.message || 'Couldn’t place the call', 'critical');
+      return opened;
+    } finally {
+      callInFlight = false;
+      setCalling(null);
+    }
+  };
+  /** The pharmacy's own number (not logged: it isn't a patient call). */
+  const callPharmacy = async (d: Delivery) => {
+    if (!d.pickup?.phone) return showToast('No phone number for this pharmacy', 'critical');
+    if (!(await dial(d.pickup.phone))) showToast('Couldn’t open the dialer', 'critical');
+  };
+  return { calling, call, callPharmacy };
 }
 
 /** Round action button used on booking cards (Directions / Call). */

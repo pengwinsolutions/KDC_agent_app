@@ -12,12 +12,19 @@ describe('where a push opens', () => {
     ['agent.booking_cancelled', 'lab_booking', 'KDC-DX-00000ABC', { screen: 'home' }],
     ['agent.support_replied', 'support_ticket', 'KDC-ST-0001', { screen: 'notifications' }],
     ['campaign', 'campaign', 'CMP-12', { screen: 'notifications' }],
+    ['agent.delivery_assigned', 'delivery', 'KDC-PH-AB12CD34', { screen: 'delivery-details', params: { code: 'KDC-PH-AB12CD34' } }],
+    ['agent.delivery_unassigned', 'delivery', 'KDC-PH-AB12CD34', { screen: 'delivery-details', params: { code: 'KDC-PH-AB12CD34' } }],
   ])('%s (%s) → %o', (event, type, code, route) => {
     expect(pushRoute(push({ event, type, code, notificationId: '7' }))).toEqual(route);
   });
 
   it('a booking push without a code opens the active bookings', () => {
     expect(pushRoute(push({ event: 'agent.booking_assigned', type: 'lab_booking', code: '' }))).toEqual({ screen: 'home' });
+  });
+
+  it('a delivery push without a code opens the deliveries list; its code is a delivery code, not a booking id', () => {
+    expect(pushRoute(push({ event: 'agent.delivery_assigned', type: 'delivery', code: '' }))).toEqual({ screen: 'home', params: { tab: 'deliveries' } });
+    expect(pushNotification(push({ event: 'agent.delivery_assigned', type: 'delivery', code: 'KDC-PH-AB12CD34' }))).toMatchObject({ target: 'delivery', delivery_code: 'KDC-PH-AB12CD34', booking_id: undefined });
   });
 
   it('opens nothing for an unknown kind or a push without data', () => {

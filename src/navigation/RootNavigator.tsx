@@ -9,6 +9,7 @@ import { HomeScreen } from '../screens/home';
 import { SampleScreen, TestDetailsScreen } from '../screens/collection';
 import { CollectPaymentScreen } from '../screens/payment';
 import { BookingDetailsScreen } from '../screens/details';
+import { DeliveryDetailsScreen } from '../screens/deliveries';
 import * as Account from '../screens/account';
 import { setSessionExpiredHandler } from '../api/client';
 import { flushPendingPush, pausePush, startPush } from '../notifications/push';
@@ -17,7 +18,7 @@ import { showToast } from '../store/toast';
 
 const Stack = createNativeStackNavigator();
 
-/** The spec's 14 screens, one stack. */
+/** The spec's screens (less the wallet) and delivery details, one stack. */
 export const SCREENS: { name: RouteName; component: React.ComponentType<any>; title: string }[] = [
   { name: 'splash', component: Auth.SplashScreen, title: 'Splash' },
   { name: 'login', component: Auth.LoginScreen, title: 'Agent Login' },
@@ -29,6 +30,7 @@ export const SCREENS: { name: RouteName; component: React.ComponentType<any>; ti
   { name: 'profile', component: Account.ProfileScreen, title: 'Profile' },
   { name: 'history', component: Account.HistoryScreen, title: 'Booking History' },
   { name: 'booking-details', component: BookingDetailsScreen, title: 'Booking Details' },
+  { name: 'delivery-details', component: DeliveryDetailsScreen, title: 'Delivery Details' },
   { name: 'notifications', component: Account.NotificationsScreen, title: 'Notifications' },
   { name: 'help', component: Account.HelpScreen, title: 'Need Help' },
   { name: 'policy', component: Account.PolicyScreen, title: 'Policy' },

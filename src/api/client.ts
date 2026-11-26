@@ -84,14 +84,16 @@ interface BackendEnvelope<T> {
 async function http<T>(method: Method, path: string, body: unknown, token: string | null): Promise<{ status: number; json: BackendEnvelope<T> | null }> {
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (token) headers.Authorization = `Bearer ${token}`;
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  // A FormData body (a file upload) sets its own multipart Content-Type with the boundary.
+  const form = typeof FormData !== 'undefined' && body instanceof FormData;
+  if (body !== undefined && !form) headers['Content-Type'] = 'application/json';
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), API_CONFIG.timeoutMs);
   try {
     const r = await fetch(`${API_CONFIG.baseUrl}/${path.replace(/^\/+/, '')}`, {
       method,
       headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      body: form ? (body as FormData) : body !== undefined ? JSON.stringify(body) : undefined,
       signal: ctrl.signal,
     });
     const json = (await r.json().catch(() => null)) as BackendEnvelope<T> | null;

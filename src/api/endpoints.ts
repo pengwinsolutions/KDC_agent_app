@@ -5,7 +5,7 @@
 import { Platform } from 'react-native';
 import { api, API_CONFIG } from './client';
 import * as live from './live';
-import type { AgentNotification, AgentProfile, Booking, BookingStatus, Envelope } from '../domain/types';
+import type { AgentNotification, AgentProfile, Booking, BookingStatus, Delivery, Envelope, FailureReason } from '../domain/types';
 
 const demo = {
   Auth: {
@@ -44,6 +44,20 @@ const demo = {
     callLog: (id: number, event_type: 'INITIATED' | 'SUCCESS' | 'FAILED', message?: string) =>
       api.post('secure/booking/call-log', { booking_id: id, event_type, message, timestamp: new Date().toISOString() }),
   },
+  /** Medicine deliveries (the backend's /agent/deliveries); the demo answers them with sample orders. */
+  Deliveries: {
+    active: () => api.get<Delivery[]>('secure/deliveries/active'),
+    past: () => api.get<Delivery[]>('secure/deliveries/past'),
+    details: (code: string) => api.get<Delivery>(`secure/deliveries/${code}`),
+    pickedUp: (code: string) => api.post<Delivery>(`secure/deliveries/${code}/picked-up`, {}),
+    deliver: (code: string, otp: string, opts: { deliveredTo?: string; podFileId?: number } = {}) =>
+      api.post<Delivery>(`secure/deliveries/${code}/deliver`, { otp, ...opts }),
+    failed: (code: string, reason: FailureReason, note?: string) => api.post<Delivery>(`secure/deliveries/${code}/delivery-failed`, { reason, note }),
+    uploadProof: (_uri: string) => api.post<{ id: number }>('secure/files', { purpose: 'delivery_proof' }),
+    callPatient: (code: string) => api.post<{ phone: string }>(`secure/deliveries/${code}/call-patient`, {}),
+    callLog: (code: string, event_type: 'INITIATED' | 'SUCCESS' | 'FAILED', message?: string) =>
+      api.post(`secure/deliveries/${code}/call-logs`, { event_type, message }),
+  },
   Notifications: {
     page: (n: number) => api.post<{ data: AgentNotification[]; current_page: number; last_page: number }>(`secure/notifications/${n}`, {}),
   },
@@ -66,6 +80,7 @@ export const LIVE = !API_CONFIG.useMock;
 export const Auth = chosen.Auth;
 export const Profile = chosen.Profile;
 export const Bookings = chosen.Bookings;
+export const Deliveries = chosen.Deliveries;
 export const Notifications = chosen.Notifications;
 export const Help = chosen.Help;
 export const Cms = chosen.Cms;

@@ -5,24 +5,27 @@ import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import { Btn, Div, P, Span, TextField } from '../components/primitives/index';
 import {
   Bell, CalendarDays, CircleAlert, ClipboardCheck, CreditCard, FileText, FlaskConical,
-  Headphones, History, Inbox, LifeBuoy, LogOut, Megaphone, Phone, Receipt, RefreshCw, Send, ShieldCheck, Trash2, X,
+  Headphones, History, Inbox, LifeBuoy, LogOut, Megaphone, Package, Phone, Receipt, RefreshCw, Send, ShieldCheck, TestTubes, Trash2, X,
 } from '../components/primitives/icons';
 import { Screen } from '../components/ui/Screen';
 import { ScreenHeader } from '../components/ui/Nav';
 import { Button, StickyBar } from '../components/ui/Button';
-import { Card, Group, ListRow } from '../components/ui/Display';
+import { Card, Group, ListRow, Segmented } from '../components/ui/Display';
 import { Skeleton, StateBlock } from '../components/ui/Feedback';
 import { BookingCard } from '../components/agent/BookingCard';
+import { DeliveryCard } from '../components/agent/DeliveryCard';
+import { useWorkTab } from '../hooks/useWorkTab';
+import type { WorkTab } from '../navigation/routes';
 import { ConfirmDialog, Grid, useColumns } from '../components/agent';
 import { useNav, useParams } from '../navigation/navigation';
 import { useFocusFetch } from '../hooks/useFocusFetch';
-import { Cms, Help, Notifications, Profile, Bookings, LIVE } from '../api/endpoints';
+import { Cms, Deliveries, Help, Notifications, Profile, Bookings, LIVE } from '../api/endpoints';
 import { resetMockDb } from '../api/mockServer';
 import { endSession } from '../api/client';
 import { useSession } from '../store/session';
 import { showToast } from '../store/toast';
 import { openFromPush, stopPush, useOnPush } from '../notifications/push';
-import type { AgentNotification } from '../domain/types';
+import type { AgentNotification, AgentService } from '../domain/types';
 import { extractList, hasMorePages, normaliseStatus, relativeTime } from '../domain/rules';
 import { SUPPORT_PHONE } from '../mock-data/seed';
 
@@ -85,8 +88,32 @@ export function ProfileScreen() {
           </Div>
         </View>
 
+        {me?.services?.length ? (
+          <Card elevation="tile">
+            <P className="text-caption font-semibold uppercase tracking-[.08em] text-ink-400">Your skills</P>
+            <Div className="mt-2.5 flex-row flex-wrap gap-2">
+              {me.services.map((s) => {
+                const { label, Icon } = SKILLS[s];
+                return (
+                  <Span key={s} className="flex-row items-center gap-1.5 rounded-chip bg-brand-50 px-3 py-1.5">
+                    <Icon className="h-[14px] w-[14px] text-brand-700" strokeWidth={2.2} />
+                    <Span className="text-caption font-semibold text-brand-700">{label}</Span>
+                  </Span>
+                );
+              })}
+            </Div>
+            <P className="mt-2 text-caption text-ink-400">KDC+ operations set your skills.</P>
+          </Card>
+        ) : null}
+
         <Group>
-          <ListRow icon={<History className="h-[18px] w-[18px]" strokeWidth={2.1} />} title="History" subtitle="Completed and rejected bookings" onClick={() => nav.navigate('history')} last />
+          <ListRow
+            icon={<History className="h-[18px] w-[18px]" strokeWidth={2.1} />}
+            title="History"
+            subtitle={me?.services?.includes('medicine_delivery') ? (me.services.includes('sample_collection') ? 'Past bookings and deliveries' : 'Past deliveries') : 'Completed and rejected bookings'}
+            onClick={() => nav.navigate('history')}
+            last
+          />
         </Group>
 
         <Group>
@@ -140,9 +167,73 @@ export function ProfileScreen() {
   );
 }
 
+const SKILLS: Record<AgentService, { label: string; Icon: typeof Package }> = {
+  sample_collection: { label: 'Home sample collection', Icon: TestTubes },
+  medicine_delivery: { label: 'Medicine delivery', Icon: Package },
+};
+
 /* ============================================================ History */
 
 export function HistoryScreen() {
+  const { data: me } = useFocusFetch(() => Profile.get());
+  const { tab, setTab, both } = useWorkTab(me, useParams<'history'>()?.tab);
+  return (
+    <>
+      {tab === 'deliveries' ? <PastDeliveries both={both} onTab={setTab} /> : <PastBookings both={both} onTab={setTab} />}
+    </>
+  );
+}
+
+function WorkSwitch({ value, onTab }: { value: WorkTab; onTab: (t: WorkTab) => void }) {
+  return (
+    <Segmented
+      className="mb-4"
+      value={value}
+      onChange={(id) => onTab(id as WorkTab)}
+      options={[
+        { id: 'collections', label: 'Collections' },
+        { id: 'deliveries', label: 'Deliveries' },
+      ]}
+    />
+  );
+}
+
+function PastDeliveries({ both, onTab }: { both: boolean; onTab: (t: WorkTab) => void }) {
+  const nav = useNav();
+  const { data, loading, error, refreshing, refresh, reload } = useFocusFetch(() => Deliveries.past());
+  const list = data ?? [];
+  const delivered = list.filter((d) => d.status === 'DELIVERED').length;
+  const other = list.length - delivered;
+
+  return (
+    <Screen onRefresh={refresh} refreshing={refreshing}>
+      <ScreenHeader title="History" subtitle="Past deliveries" />
+      <Div className="px-4 pb-10 pt-4">
+        {both ? <WorkSwitch value="deliveries" onTab={onTab} /> : null}
+        <Div className="mb-4 flex-row gap-2.5">
+          <Summary label="Total" value={list.length} tone="text-ink-900" />
+          <Summary label="Delivered" value={delivered} tone="text-vital-700" />
+          <Summary label="Returned / other" value={other} tone="text-ink-600" />
+        </Div>
+        {loading ? (
+          <Div className="gap-3">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-[200px] w-full" rounded={18} />)}</Div>
+        ) : error ? (
+          <StateBlock icon={<X className="h-[26px] w-[26px]" strokeWidth={2.2} />} tone="critical" title="Couldn’t load history" body={error} primary={<Button size="md" onClick={() => reload('initial')}>Try again</Button>} />
+        ) : list.length === 0 ? (
+          <StateBlock icon={<Package className="h-[26px] w-[26px]" strokeWidth={2} />} tone="brand" title="No past deliveries yet" body="Delivered and returned orders appear here." />
+        ) : (
+          <Grid
+            items={list}
+            keyOf={(d) => d.code}
+            render={(d) => <DeliveryCard delivery={d} variant="past" onOpen={() => nav.navigate('delivery-details', { params: { code: d.code } })} />}
+          />
+        )}
+      </Div>
+    </Screen>
+  );
+}
+
+function PastBookings({ both, onTab }: { both: boolean; onTab: (t: WorkTab) => void }) {
   const nav = useNav();
   const { data, loading, error, refreshing, refresh, reload } = useFocusFetch(() => Bookings.past());
   const list = extractList(data ?? []);
@@ -153,6 +244,7 @@ export function HistoryScreen() {
     <Screen onRefresh={refresh} refreshing={refreshing}>
       <ScreenHeader title="History" subtitle="Past bookings" />
       <Div className="px-4 pb-10 pt-4">
+        {both ? <WorkSwitch value="collections" onTab={onTab} /> : null}
         <Div className="mb-4 flex-row gap-2.5">
           <Summary label="Total" value={list.length} tone="text-ink-900" />
           <Summary label="Completed" value={completed} tone="text-vital-700" />
@@ -199,6 +291,7 @@ function normaliseNotification(raw: any): AgentNotification {
     message: String(pick(raw, ['message', 'body', 'description', 'content']) ?? ''),
     image: pick(raw, ['image', 'image_url']),
     booking_id: raw.booking_id ?? raw.data?.booking_id,
+    delivery_code: raw.delivery_code,
     target: raw.target ?? raw.data?.type,
     read_flag: read === 1 || read === true || (typeof read === 'string' && read !== '0') ? 1 : 0,
     created_at: String(pick(raw, ['created_at', 'date']) ?? ''),
@@ -207,6 +300,7 @@ function normaliseNotification(raw: any): AgentNotification {
 
 function iconFor(type: string) {
   const t = type.toUpperCase();
+  if (t.includes('DELIVERY')) return { Icon: Package, bg: 'bg-brand-50', fg: 'text-brand-600' };
   if (t.startsWith('BOOK')) return { Icon: CalendarDays, bg: 'bg-brand-50', fg: 'text-brand-600' };
   if (t.startsWith('PAY')) return { Icon: CreditCard, bg: 'bg-vital-50', fg: 'text-vital-600' };
   if (t.includes('REPORT') || t.includes('TEST')) return { Icon: FlaskConical, bg: 'bg-caution-50', fg: 'text-caution-700' };

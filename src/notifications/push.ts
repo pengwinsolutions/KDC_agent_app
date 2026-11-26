@@ -1,6 +1,6 @@
 /**
- * Push notifications (spec 9), so an agent hears about a new collection job, a cancelled one or
- * a support reply while the app is in the background or closed.
+ * Push notifications (spec 9), so an agent hears about a new collection job, a cancelled one, a
+ * medicine delivery given to them or taken away, or a support reply while the app is in the background or closed.
  *
  * Live builds use Firebase Cloud Messaging (android/app/google-services.json). Every Firebase call
  * here is a no-op when Firebase isn't configured for the build (no default app) and in demo
@@ -22,7 +22,7 @@ import { PermissionsAndroid, Platform } from 'react-native';
 import { create } from 'zustand';
 import type { AgentNotification } from '../domain/types';
 import { onMockPush } from '../api/mockServer';
-import { Bookings, LIVE, Profile } from '../api/endpoints';
+import { Bookings, Deliveries, LIVE, Profile } from '../api/endpoints';
 import { useSession } from '../store/session';
 import { navigationRef, resetRoot } from '../navigation/navigation';
 import type { RouteName } from '../navigation/routes';
@@ -63,11 +63,15 @@ export interface PushRoute {
 
 /**
  * Where a notification opens, from the inbox, the banner or a push. Live notifications carry the
- * server's target (`target`: lab_booking, support_ticket, campaign) and event (`type`, e.g.
+ * server's target (`target`: lab_booking, delivery, support_ticket, campaign) and event (`type`, e.g.
  * agent.booking_assigned); demo ones only the spec's type and booking id. Null: nothing to open.
  */
-export function notificationRoute(n: Pick<AgentNotification, 'type' | 'booking_id' | 'target'>): PushRoute | null {
+export function notificationRoute(n: Pick<AgentNotification, 'type' | 'booking_id' | 'target' | 'delivery_code'>): PushRoute | null {
   switch (n.target) {
+    case 'delivery':
+      // agent.delivery_assigned / _unassigned: the delivery (a taken-away one opens read-only).
+      if (!n.delivery_code) return { screen: 'home', params: { tab: 'deliveries' } };
+      return { screen: 'delivery-details', params: { code: n.delivery_code } };
     case 'lab_booking':
       // A cancelled or reassigned job is no longer the agent's: the active list shows what's left.
       if (n.type === 'agent.booking_cancelled' || !n.booking_id) return { screen: 'home' };
@@ -102,6 +106,7 @@ export function pushNotification(remote: Remote): AgentNotification | null {
     title: remote?.notification?.title ?? 'KDC+ Agent',
     message: remote?.notification?.body ?? '',
     booking_id: target === 'lab_booking' ? code : undefined,
+    delivery_code: target === 'delivery' ? code : undefined,
     read_flag: 0,
     created_at: new Date().toISOString(),
   };
@@ -138,8 +143,15 @@ export async function openFromPush(n: AgentNotification) {
   useHeadsUp.getState().dismiss();
   const route = notificationRoute(n);
   if (!route) return;
+  if (route.screen === 'delivery-details') {
+    // Gone since (not yours, never was): the deliveries list shows what's left.
+    const res = await Deliveries.details(String(route.params?.code));
+    if (res.code === 0 && res.data) navigationRef.navigate(...(['delivery-details', { code: res.data.code }] as never));
+    else resetRoot('home', { tab: 'deliveries' });
+    return;
+  }
   if (route.screen !== 'booking-details') {
-    if (route.screen === 'home') resetRoot('home');
+    if (route.screen === 'home') resetRoot('home', route.params);
     else navigationRef.navigate(...([route.screen, route.params] as never));
     return;
   }

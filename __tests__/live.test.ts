@@ -1,9 +1,9 @@
 /** The live layer (src/api/live.ts, src/api/client.ts) against a fake backend. */
 jest.mock('../src/api/config', () => ({ API_CONFIG: { useMock: false, baseUrl: 'https://api.test/api/v1', timeoutMs: 5000 } }));
 
-import { codeOf, idOf, toBooking, tubeOf, type ApiBooking } from '../src/api/live';
+import { codeOf, idOf, servicesOf, toBooking, toDelivery, tubeOf, type ApiBooking, type ApiDelivery } from '../src/api/live';
 import { liveRequest, refreshSession, restoreSession, setSessionExpiredHandler } from '../src/api/client';
-import { Auth, Bookings } from '../src/api/endpoints';
+import { Auth, Bookings, Deliveries, Notifications, Profile } from '../src/api/endpoints';
 import { useSession } from '../src/store/session';
 import { loadRefreshToken, saveRefreshToken } from '../src/store/secure';
 
@@ -197,5 +197,162 @@ describe('live booking flows', () => {
     });
     const dob = `${new Date().getFullYear() - 60}-01-01`;
     expect(await Bookings.addPatients(idOf('KDC-DX-CGJ59B5F'), [{ full_name: 'Meena Verma', gender: 'Female', dob, patient_mobile: '+91 98765 00001' }])).toMatchObject({ code: 0 });
+  });
+});
+
+/* ------------------------------------------------------------ Deliveries */
+
+/** The backend's delivery view, as GET /agent/deliveries sends it (docs/delivery-fleet-api.md). */
+const apiDelivery = (over: Partial<ApiDelivery> = {}): ApiDelivery => ({
+  code: 'KDC-PH-AB12CD34',
+  status: 'out_for_delivery',
+  appStatus: 'ASSIGNED',
+  canAct: true,
+  nextStep: 'pick_up',
+  pickup: { pharmacy: { code: 'KDC-PS-0007', name: 'Apollo Pharmacy' }, address: { line: 'Plot 12', locality: 'Madhapur', city: 'Hyderabad', pincode: '500081' }, phone: '9849011001', geo: null, pickedUpAt: null },
+  drop: { name: 'Lakshmi Reddy', address: { label: 'Home', line: 'Flat 402', area: 'Kondapur', city: 'Hyderabad', pincode: '500084' }, geo: { lat: 17.46, lng: 78.36 }, phone: '9876501234' },
+  items: { lines: 1, units: 2 },
+  payment: { method: 'cod', collectAmount: 101, collectPaise: 10100, collectedPaise: null },
+  window: { slot: '26 Nov, 9 AM–12 PM', startsAt: '2026-11-26T03:30:00.000Z' },
+  attempts: { count: 1, max: 3, current: 1 },
+  codeLocked: false,
+  codeTriesLeft: 5,
+  dispatchedAt: '2026-11-25T08:00:00.000Z',
+  deliveredAt: null,
+  deliveredTo: null,
+  lastFailure: null,
+  ...over,
+});
+
+describe('deliveries mapping', () => {
+  it('maps the delivery view: pickup, drop, cash in rupees from paise, window, attempts, lock', () => {
+    expect(toDelivery(apiDelivery())).toEqual({
+      code: 'KDC-PH-AB12CD34',
+      status: 'ASSIGNED',
+      orderStatus: 'out_for_delivery',
+      canAct: true,
+      nextStep: 'pick_up',
+      pickup: { pharmacyCode: 'KDC-PS-0007', name: 'Apollo Pharmacy', line: 'Plot 12', locality: 'Madhapur', city: 'Hyderabad', pincode: '500081', phone: '9849011001', lat: null, lng: null, pickedUpAt: null },
+      drop: { name: 'Lakshmi Reddy', label: 'Home', line: 'Flat 402', area: 'Kondapur', city: 'Hyderabad', pincode: '500084', lat: 17.46, lng: 78.36, phone: '9876501234' },
+      items: { lines: 1, units: 2 },
+      payment: { method: 'cod', collect: 101, collected: null },
+      slot: '26 Nov, 9 AM–12 PM',
+      startsAt: '2026-11-26T03:30:00.000Z',
+      attempts: { count: 1, max: 3, current: 1 },
+      codeLocked: false,
+      codeTriesLeft: 5,
+      dispatchedAt: '2026-11-25T08:00:00.000Z',
+      deliveredAt: null,
+      deliveredTo: null,
+      lastFailure: null,
+    });
+  });
+
+  it('copes with a past delivery: no pharmacy, no address, prepaid, collected cash, a failure', () => {
+    const d = toDelivery(apiDelivery({
+      appStatus: 'DELIVERED', canAct: false, nextStep: null, pickup: null,
+      drop: { name: null, address: null, geo: null, phone: null },
+      payment: { method: 'online', collectAmount: 0, collectPaise: 0, collectedPaise: 13200 },
+      attempts: { count: 2, max: 3, current: null }, codeTriesLeft: null,
+      lastFailure: { reason: 'not_home', label: 'Patient not at home', note: null, at: '2026-11-25T09:00:00.000Z' },
+    }));
+    expect(d).toMatchObject({ status: 'DELIVERED', pickup: null, drop: { name: '', line: '', lat: null, phone: null }, payment: { method: 'online', collect: 0, collected: 132 }, codeTriesLeft: null, lastFailure: { reason: 'not_home' } });
+    expect(toDelivery(apiDelivery({ appStatus: 'SOMETHING_NEW', canAct: false })).status).toBe('DELIVERED');
+  });
+
+  it('reads the agent’s skills; an older server without them means sample collection', () => {
+    expect(servicesOf(['medicine_delivery', 'x'])).toEqual(['medicine_delivery']);
+    expect(servicesOf(undefined)).toEqual(['sample_collection']);
+    expect(servicesOf(null)).toEqual(['sample_collection']);
+  });
+});
+
+describe('live delivery flows', () => {
+  beforeEach(() => useSession.setState({ token: 'kdc_at_x' }));
+
+  it('profile: GET agent/me with services', async () => {
+    replies.push(() => ok({ code: 'KDC-AG-4MCE', name: 'Ravi Kumar', city: 'Hyderabad', mobile: '9440012345', email: null, status: 'active', services: ['sample_collection', 'medicine_delivery'] }));
+    expect(await Profile.get()).toMatchObject({ code: 0, data: { agent_code: 'KDC-AG-4MCE', services: ['sample_collection', 'medicine_delivery'] } });
+  });
+
+  it('lists by scope, opens one, picks up', async () => {
+    replies.push((url) => {
+      expect(url).toBe('https://api.test/api/v1/agent/deliveries?scope=active');
+      return ok([apiDelivery()]);
+    });
+    expect((await Deliveries.active()).data![0].code).toBe('KDC-PH-AB12CD34');
+    replies.push((url) => {
+      expect(url).toContain('agent/deliveries?scope=past');
+      return ok([]);
+    });
+    expect(await Deliveries.past()).toMatchObject({ code: 0, data: [] });
+    replies.push((url, init) => {
+      expect(url).toContain('agent/deliveries/KDC-PH-AB12CD34/picked-up');
+      expect(init.method).toBe('POST');
+      return ok(apiDelivery({ appStatus: 'PICKED_UP', nextStep: 'deliver' }), 'Picked up');
+    });
+    expect(await Deliveries.pickedUp('KDC-PH-AB12CD34')).toMatchObject({ code: 0, message: 'Picked up', data: { status: 'PICKED_UP' } });
+  });
+
+  it('deliver: the code, who took it and the photo id; a wrong code is the server’s words', async () => {
+    replies.push((_url, init) => {
+      expect(JSON.parse(init.body as string)).toEqual({ otp: '0000' });
+      return { status: 422, body: { code: 0, message: 'Validation failed', data: null, errors: { otp: ['Wrong delivery code. 4 tries left.'] } } };
+    });
+    expect(await Deliveries.deliver('KDC-PH-AB12CD34', '0000', { deliveredTo: '  ' })).toMatchObject({ code: 1, message: 'Wrong delivery code. 4 tries left.' });
+    replies.push((url, init) => {
+      expect(url).toContain('agent/deliveries/KDC-PH-AB12CD34/deliver');
+      expect(JSON.parse(init.body as string)).toEqual({ otp: '4821', deliveredTo: 'Security, Gate 2', podFileId: 77 });
+      return ok(apiDelivery({ appStatus: 'DELIVERED', status: 'delivered', canAct: false, nextStep: null, deliveredTo: 'Security, Gate 2' }), 'Delivered');
+    });
+    expect(await Deliveries.deliver('KDC-PH-AB12CD34', '4821', { deliveredTo: ' Security, Gate 2 ', podFileId: 77 })).toMatchObject({ code: 0, data: { status: 'DELIVERED' } });
+    replies.push(() => ({ status: 409, body: { code: 0, message: 'Too many wrong codes. Ask KDC+ to reset the delivery code.', data: null, errors: null } }));
+    expect(await Deliveries.deliver('KDC-PH-AB12CD34', '1111')).toMatchObject({ code: 1, message: expect.stringContaining('reset') });
+  });
+
+  it('the proof photo goes up as multipart with purpose delivery_proof', async () => {
+    // The app runs on React Native's FormData (file parts as {uri, name, type}), not Node's.
+    const g = globalThis as unknown as { FormData: unknown };
+    const nodeFormData = g.FormData;
+    // eslint-disable-next-line @react-native/no-deep-imports -- React Native doesn't export its FormData
+    g.FormData = require('react-native/Libraries/Network/FormData').default;
+    replies.push((url, init) => {
+      expect(url).toBe('https://api.test/api/v1/files');
+      expect(init.body).toBeInstanceOf(FormData);
+      expect((init.headers as Record<string, string>)['Content-Type']).toBeUndefined();
+      const parts = (init.body as any)._parts as [string, any][];
+      expect(parts.find(([k]) => k === 'purpose')?.[1]).toBe('delivery_proof');
+      expect(parts.find(([k]) => k === 'file')?.[1]).toMatchObject({ uri: 'file:///cache/shot.jpg', type: 'image/jpeg' });
+      return ok({ id: 77, purpose: 'delivery_proof' });
+    });
+    try {
+      expect(await Deliveries.uploadProof('file:///cache/shot.jpg')).toEqual({ code: 0, message: 'Request completed successfully', data: { id: 77 } });
+    } finally {
+      g.FormData = nodeFormData;
+    }
+  });
+
+  it('a failed delivery sends the reason and a trimmed note; calls are logged in the server’s words', async () => {
+    replies.push((url, init) => {
+      expect(url).toContain('agent/deliveries/KDC-PH-AB12CD34/delivery-failed');
+      expect(JSON.parse(init.body as string)).toEqual({ reason: 'other', note: 'Gate closed' });
+      return ok(apiDelivery({ appStatus: 'FAILED', status: 'delivery_failed', canAct: false, nextStep: 'return_to_pharmacy' }));
+    });
+    expect(await Deliveries.failed('KDC-PH-AB12CD34', 'other', ' Gate closed ')).toMatchObject({ code: 0, data: { status: 'FAILED', nextStep: 'return_to_pharmacy' } });
+    replies.push((url, init) => {
+      expect(url).toContain('agent/deliveries/KDC-PH-AB12CD34/call-logs');
+      expect(JSON.parse(init.body as string)).toEqual({ event: 'initiated' });
+      return ok({ logged: true });
+    });
+    expect((await Deliveries.callLog('KDC-PH-AB12CD34', 'INITIATED')).code).toBe(0);
+    replies.push(() => ok(apiDelivery({ drop: { name: 'X', address: null, geo: null, phone: null } })));
+    expect(await Deliveries.callPatient('KDC-PH-AB12CD34')).toMatchObject({ code: 1 });
+  });
+
+  it('inbox rows about a delivery carry its order code', async () => {
+    replies.push(() => ok({ rows: [{ id: 9, event: 'agent.delivery_assigned', title: 'New delivery', body: 'x', data: { type: 'delivery', code: 'KDC-PH-AB12CD34' }, unread: true, createdAt: '2026-11-25T08:00:00.000Z' }], total: 1, page: 1, pageSize: 20 }));
+    replies.push(() => ok({ updated: 1 }));
+    const r = await Notifications.page(1);
+    expect(r.data!.data[0]).toMatchObject({ target: 'delivery', delivery_code: 'KDC-PH-AB12CD34', booking_id: undefined });
   });
 });

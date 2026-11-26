@@ -10,7 +10,7 @@
  *   the attempt is logged.
  */
 import { Platform } from 'react-native';
-import type { AgentNotification, AgentProfile, Booking, BookingStatus, Envelope, LabSample, OtherPatient, Sample } from '../domain/types';
+import type { AgentNotification, AgentProfile, AgentService, Booking, BookingStatus, Delivery, DeliveryStatus, Envelope, FailureReason, LabSample, OtherPatient, Sample } from '../domain/types';
 import { useSession } from '../store/session';
 import { adoptSession, liveRequest } from './client';
 
@@ -153,14 +153,22 @@ export const Auth = {
 
 /* ---------------------------------------------------------------- Profile */
 
+const SERVICES: AgentService[] = ['sample_collection', 'medicine_delivery'];
+/** The agent's skills; an older server (no `services`) means home sample collection only, the backend's default. */
+export function servicesOf(raw: string[] | null | undefined): AgentService[] {
+  const known = (raw ?? []).filter((x): x is AgentService => SERVICES.includes(x as AgentService));
+  return raw ? known : ['sample_collection'];
+}
+
 export const Profile = {
   get: async (): Promise<Envelope<AgentProfile>> =>
-    mapped(await liveRequest<{ code: string; name: string; city: string | null; mobile: string | null; email: string | null }>('GET', 'agent/me'), (a) => ({
+    mapped(await liveRequest<{ code: string; name: string; city: string | null; mobile: string | null; email: string | null; services?: string[] | null }>('GET', 'agent/me'), (a) => ({
       name: a.name,
       email: a.email ?? '',
       mobile: a.mobile ?? '',
       agent_code: a.code,
       city: a.city ?? '',
+      services: servicesOf(a.services),
     })),
   /**
    * This phone, with its push token (null: notifications off or no Firebase), under its install id.
@@ -275,6 +283,136 @@ export const Bookings = {
     liveRequest('POST', `agent/bookings/${codeOf(id)}/call-logs`, { event: event_type.toLowerCase(), ...(message ? { message: message.slice(0, 255) } : {}) }),
 };
 
+/* ------------------------------------------------------------- Deliveries */
+
+/** GET /agent/deliveries(/:code): the backend's delivery view (docs/delivery-fleet-api.md). */
+export interface ApiDelivery {
+  code: string;
+  status: string;
+  appStatus: string;
+  canAct: boolean;
+  nextStep: 'pick_up' | 'deliver' | 'return_to_pharmacy' | null;
+  pickup: {
+    pharmacy: { code: string; name: string };
+    address: { line: string | null; locality: string | null; city: string | null; pincode: string | null };
+    phone: string | null;
+    geo: { lat: number; lng: number } | null;
+    pickedUpAt: string | null;
+  } | null;
+  drop: {
+    name: string | null;
+    address: { label: string | null; line: string | null; area: string | null; city: string | null; pincode: string | null } | null;
+    geo: { lat: number; lng: number } | null;
+    phone: string | null;
+  };
+  items: { lines: number; units: number };
+  payment: { method: string; collectAmount: number | string; collectPaise: number; collectedPaise: number | null };
+  window: { slot: string | null; startsAt: string | null };
+  attempts: { count: number; max: number; current: number | null };
+  codeLocked: boolean;
+  codeTriesLeft: number | null;
+  dispatchedAt: string | null;
+  deliveredAt: string | null;
+  deliveredTo: string | null;
+  lastFailure: { reason: string | null; label: string | null; note: string | null; at: string | null } | null;
+}
+
+const DELIVERY_STATUSES: DeliveryStatus[] = ['ASSIGNED', 'PICKED_UP', 'FAILED', 'DELIVERED', 'RETURNED', 'CANCELLED', 'REASSIGNED'];
+const num = (v: unknown) => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
+
+export function toDelivery(d: ApiDelivery): Delivery {
+  const status = (DELIVERY_STATUSES.includes(d.appStatus as DeliveryStatus) ? d.appStatus : d.canAct ? 'ASSIGNED' : 'DELIVERED') as DeliveryStatus;
+  const a = d.drop?.address;
+  return {
+    code: d.code,
+    status,
+    orderStatus: d.status,
+    canAct: Boolean(d.canAct),
+    nextStep: d.nextStep ?? null,
+    pickup: d.pickup
+      ? {
+          pharmacyCode: d.pickup.pharmacy.code,
+          name: d.pickup.pharmacy.name,
+          line: d.pickup.address.line ?? '',
+          locality: d.pickup.address.locality ?? '',
+          city: d.pickup.address.city ?? '',
+          pincode: d.pickup.address.pincode ?? '',
+          phone: d.pickup.phone || null,
+          lat: num(d.pickup.geo?.lat),
+          lng: num(d.pickup.geo?.lng),
+          pickedUpAt: d.pickup.pickedUpAt ?? null,
+        }
+      : null,
+    drop: {
+      name: d.drop?.name ?? '',
+      label: a?.label ?? '',
+      line: a?.line ?? '',
+      area: a?.area ?? '',
+      city: a?.city ?? '',
+      pincode: a?.pincode ?? '',
+      lat: num(d.drop?.geo?.lat),
+      lng: num(d.drop?.geo?.lng),
+      phone: d.drop?.phone || null,
+    },
+    items: { lines: Number(d.items?.lines ?? 0), units: Number(d.items?.units ?? 0) },
+    payment: {
+      method: d.payment?.method === 'cod' ? 'cod' : 'online',
+      // Paise are exact integers; rupees only as a fallback.
+      collect: d.payment ? (num(d.payment.collectPaise) !== null ? Number(d.payment.collectPaise) / 100 : (num(d.payment.collectAmount) ?? 0)) : 0,
+      collected: num(d.payment?.collectedPaise) === null ? null : Number(d.payment.collectedPaise) / 100,
+    },
+    slot: d.window?.slot ?? '',
+    startsAt: d.window?.startsAt ?? null,
+    attempts: { count: Number(d.attempts?.count ?? 0), max: Number(d.attempts?.max ?? 3), current: num(d.attempts?.current) },
+    codeLocked: Boolean(d.codeLocked),
+    codeTriesLeft: num(d.codeTriesLeft),
+    dispatchedAt: d.dispatchedAt ?? null,
+    deliveredAt: d.deliveredAt ?? null,
+    deliveredTo: d.deliveredTo ?? null,
+    lastFailure: d.lastFailure ? { reason: (d.lastFailure.reason as FailureReason) ?? null, label: d.lastFailure.label, note: d.lastFailure.note, at: d.lastFailure.at } : null,
+  };
+}
+
+const deliveryPath = (code: string, action = '') => `agent/deliveries/${encodeURIComponent(code)}${action ? `/${action}` : ''}`;
+
+export const Deliveries = {
+  /** Out with you, or failed (bring the parcel back). */
+  active: async (): Promise<Envelope<Delivery[]>> => mapped(await liveRequest<ApiDelivery[]>('GET', 'agent/deliveries?scope=active'), (rows) => rows.map(toDelivery)),
+  /** Delivered, returned, or given to someone else (read-only). */
+  past: async (): Promise<Envelope<Delivery[]>> => mapped(await liveRequest<ApiDelivery[]>('GET', 'agent/deliveries?scope=past'), (rows) => rows.map(toDelivery)),
+  details: async (code: string): Promise<Envelope<Delivery>> => mapped(await liveRequest<ApiDelivery>('GET', deliveryPath(code)), toDelivery),
+  /** Optional and idempotent: the parcel is collected from the pharmacy. */
+  pickedUp: async (code: string): Promise<Envelope<Delivery>> => mapped(await liveRequest<ApiDelivery>('POST', deliveryPath(code, 'picked-up'), {}), toDelivery),
+  /** The patient's 4-digit code (never sent to the app); wrong codes count down, the fifth locks it. */
+  deliver: async (code: string, otp: string, opts: { deliveredTo?: string; podFileId?: number } = {}): Promise<Envelope<Delivery>> =>
+    mapped(
+      await liveRequest<ApiDelivery>('POST', deliveryPath(code, 'deliver'), {
+        otp,
+        ...(opts.deliveredTo?.trim() ? { deliveredTo: opts.deliveredTo.trim().slice(0, 80) } : {}),
+        ...(opts.podFileId ? { podFileId: opts.podFileId } : {}),
+      }),
+      toDelivery,
+    ),
+  failed: async (code: string, reason: FailureReason, note?: string): Promise<Envelope<Delivery>> =>
+    mapped(await liveRequest<ApiDelivery>('POST', deliveryPath(code, 'delivery-failed'), { reason, ...(note?.trim() ? { note: note.trim().slice(0, 255) } : {}) }), toDelivery),
+  /** A proof-of-delivery photo (POST /files, purpose delivery_proof); its id goes with deliver. */
+  async uploadProof(uri: string): Promise<Envelope<{ id: number }>> {
+    const form = new FormData();
+    form.append('purpose', 'delivery_proof');
+    form.append('file', { uri, name: `delivery-proof-${Date.now()}.jpg`, type: 'image/jpeg' } as unknown as Blob);
+    return mapped(await liveRequest<{ id: number }>('POST', 'files', form), (f) => ({ id: f.id }));
+  },
+  /** No bridged calling: the drop address's phone (shared only while the delivery is yours and out). */
+  async callPatient(code: string): Promise<Envelope<{ phone: string }>> {
+    const current = await Deliveries.details(code);
+    if (current.code !== 0 || !current.data) return current as unknown as Envelope<{ phone: string }>;
+    if (!current.data.drop.phone) return { code: 1, message: 'No contact number on this delivery.' };
+    return { code: 0, data: { phone: current.data.drop.phone } };
+  },
+  callLog: (code: string, event_type: 'INITIATED' | 'SUCCESS' | 'FAILED', message?: string) =>
+    liveRequest('POST', deliveryPath(code, 'call-logs'), { event: event_type.toLowerCase(), ...(message ? { message: message.slice(0, 255) } : {}) }),
+};
+
 /* ---------------------------------------------------------- Notifications */
 
 interface ApiNotification {
@@ -299,8 +437,9 @@ export const Notifications = {
         title: x.title,
         message: x.body,
         target: x.data?.type,
-        // Only a booking's code is a booking id (a support ticket's isn't).
+        // Only a booking's code is a booking id (a support ticket's isn't); a delivery's is its order code.
         booking_id: !x.data?.type || x.data.type === 'lab_booking' ? (x.data?.code ?? undefined) : undefined,
+        delivery_code: x.data?.type === 'delivery' ? (x.data.code ?? undefined) : undefined,
         read_flag: x.unread ? 0 : 1,
         created_at: x.createdAt,
       })),
